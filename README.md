@@ -2,7 +2,7 @@
 
 **A small, read-only Python CLI for basic Linux health snapshots.**
 
-**Status:** v0.1.0 release candidate — prepared locally, not yet published.
+**Status:** v0.1.0 — experimental, not production-certified.
 
 Linux Health Reporter reads a fixed set of Linux metrics and prints a deterministic JSON or Markdown report to standard output. It is intentionally small, dependency-free at runtime and suitable for inspection and synthetic testing.
 
@@ -58,7 +58,7 @@ Run only the synthetic test suite:
 
     PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover -s tests -v
 
-**Validated on 2026-10-30:** 37/37 synthetic tests passed on each of two Linux/KDE neon machines running Python 3.12.3. The same twelve pre-publication source files were checked with SHA256 on both machines; the second environment used an isolated temporary in-memory copy, removed after testing.
+**Validated on 2026-10-30:** 37/37 synthetic tests passed on each of two Linux/KDE neon machines running Python 3.12.3. SHA256 checks matched all **12 files in the earlier P2 snapshot** on both machines. Ten of those files (code, tests, synthetic example and .gitignore) are unchanged in this release; README.md and pyproject.toml were subsequently updated for P3, while LICENSE and docs/engineering-workflow.md were added. The final **14-file publication tree was audited locally**, not re-tested cross-host. The second machine used an isolated temporary in-memory copy, removed after testing.
 
 The tests inject synthetic `/proc`, disk and clock responses. They **do not execute the unmocked collector or validate live metrics**. Python 3.10 and 3.11 syntax was checked, but execution under those interpreters remains unverified. No deployment, performance, security-certification or production-availability claim is implied.
 

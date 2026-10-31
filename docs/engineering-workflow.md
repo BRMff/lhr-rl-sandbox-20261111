@@ -51,7 +51,7 @@ Test inputs simulate `/proc`, `statvfs`, clocks and CLI collection through depen
 ### Evidence snapshot: 2026-10-30
 
 - **37/37 synthetic tests** passed on two Linux/KDE neon machines, both using Python 3.12.3.
-- **12/12 pre-publication source-file hashes** matched across machines.
+- **12/12 files from the earlier P2 snapshot** matched across machines by SHA256. Ten unchanged code/test/example/.gitignore files remain part of the 14-file release tree; the P2 README.md and pyproject.toml were later changed during P3, and LICENSE plus this workflow document were added afterwards. The final 14-file tree was verified locally, **not** hash-compared cross-host.
 - The second machine used a temporary RAM-backed copy with cleanup verified.
 - Python 3.10, 3.11 and 3.12 source syntax was checked; **only 3.12.3 was execution-tested**.
 - A separate AI-model reviewer reported **41 in-memory mutation probes**, of which **34 were detected and 7 survived**. Those figures describe one exploratory review, not a mutation-testing certification or a comprehensive security score.
