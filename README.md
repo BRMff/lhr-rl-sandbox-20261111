@@ -1,77 +1,117 @@
 # Linux Health Reporter
 
-**A small, read-only Python CLI for basic Linux health snapshots.**
+[![Python tests](https://github.com/BRMff/linux-health-reporter/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/BRMff/linux-health-reporter/actions/workflows/tests.yml)
 
-**Status:** v0.1.0 — experimental, not production-certified.
+**A lightweight, read-only Python CLI for Linux health snapshots — in JSON or Markdown.**
 
-Linux Health Reporter reads a fixed set of Linux metrics and prints a deterministic JSON or Markdown report to standard output. It is intentionally small, dependency-free at runtime and suitable for inspection and synthetic testing.
+Get a quick view of system load, memory, root filesystem space and uptime without deploying a monitoring service. Output is written to standard output, ready to inspect or use in scripts. The runtime uses only the Python standard library.
 
-**This is not an AI agent or an autonomous monitoring service.** Its engineering workflow used AI-assisted implementation and independent second-model review; see [Engineering workflow](docs/engineering-workflow.md).
+**Release:** [v0.1.0 (experimental)](https://github.com/BRMff/linux-health-reporter/releases/tag/v0.1.0) · **License:** [MIT](LICENSE)
 
-## Features
+## What it reports
 
-- 1-, 5- and 15-minute load averages from `/proc/loadavg`.
-- Total and available RAM from `/proc/meminfo`.
-- Total and unprivileged-available space on the root filesystem via `os.statvfs("/")`.
-- Uptime from `/proc/uptime`.
-- UTC timestamp in `YYYY-MM-DDTHH:MM:SSZ` format, or `null` if unavailable.
-- JSON output by default, with an optional Markdown report.
+| Metric | Source |
+| --- | --- |
+| Load average (1, 5 and 15 minutes) | `/proc/loadavg` |
+| Total and available RAM | `/proc/meminfo` |
+| Root filesystem capacity and available space | `os.statvfs("/")` |
+| System uptime | `/proc/uptime` |
+| UTC collection timestamp | Python clock |
 
-**Requirements:** Linux and Python 3.10 or newer. Runtime dependencies: Python standard library only. Python 3.10 and 3.11 are declared compatibility targets, not yet runtime-tested.
+- Choose **JSON** for scripts and **Markdown** for readable summaries.
+- Each metric has an explicit `ok` or `unavailable` status; unavailable values are `null`, not invented zeros.
+- The fixed report schema excludes hostnames, IP addresses, usernames, device identifiers and raw exception messages.
+- Collection is read-only and does not start services, execute shell commands, contact a network or write reports to disk.
 
 ## Quick start
 
-From the project directory:
+**Requirements:** Linux and Python 3.10 or newer.
 
-    python3 -B -m linux_health_reporter
-    python3 -B -m linux_health_reporter --format json
-    python3 -B -m linux_health_reporter --format markdown
-    python3 -B -m linux_health_reporter --help
+From a terminal:
 
-No installation is required for these commands. The `-B` option disables Python bytecode-cache writes. Without `-B`, Python may create `__pycache__` even though the reporter does not persist its own results.
+```bash
+git clone https://github.com/BRMff/linux-health-reporter.git
+cd linux-health-reporter
+python3 -B -m linux_health_reporter --format json
+python3 -B -m linux_health_reporter --format markdown
+```
 
-Reports are sent to stdout; redirecting them to a file is an explicit user choice.
+No package installation is needed. `-B` prevents Python bytecode-cache writes. The CLI itself prints to stdout; saving output is an explicit choice.
 
-**Exit codes:** `0` = complete snapshot; `1` = timestamp or at least one metric unavailable; `2` = invalid command-line arguments.
+Exit codes: `0` = complete snapshot; `1` = one or more unavailable readings (including timestamp); `2` = invalid CLI arguments.
 
-## Output and interpretation
+## Example output
 
-Every metric contains a `status` field of `ok` or `unavailable`. Unavailable measurements are reported as `null`, never silently replaced with zero. A missing or timezone-unaware timestamp is also `null`.
+Both examples below use the **same synthetic fixture**, not measurements taken from a real computer.
 
-See [examples/sample.json](examples/sample.json). **All example values are synthetic**, not collected from an actual host.
+### JSON
 
-Load average is **not** CPU utilization. The disk metric refers only to the filesystem containing `/`, and available space means space reported as available to an unprivileged user.
+```json
+{
+  "schema_version": "0.1",
+  "timestamp_utc": "2026-01-02T03:04:05Z",
+  "load_average": {
+    "status": "ok",
+    "1m": 0.42,
+    "5m": 0.36,
+    "15m": 0.31
+  },
+  "memory": {
+    "status": "ok",
+    "total_bytes": 16777216000,
+    "available_bytes": 9437184000
+  },
+  "disk_root": {
+    "status": "ok",
+    "total_bytes": 512000000000,
+    "available_bytes": 256000000000
+  },
+  "uptime": {
+    "status": "ok",
+    "uptime_seconds": 86400
+  }
+}
+```
 
-## Privacy and operational boundaries
+[View the versioned JSON fixture](examples/sample.json).
 
-- No elevated privileges, shell commands, network calls, agents, service control, background jobs or collection scheduling.
-- Fixed collection targets; there are no user-specified filesystem paths.
-- No hostname, user identifiers, IP/MAC addresses, process lists, device serial numbers, environment variables, logs or additional mounts in the report schema.
-- Collection errors yield `unavailable` without exposing raw exception messages.
-- Reports and timestamps may still reveal aspects of system use. **Review real reports before sharing them publicly.**
+### Markdown
 
-The project contains no source code, production telemetry or configuration copied from private projects.
+```text
+# Linux Health Report
 
-## Tests and evidence
+Generated (UTC): 2026-01-02T03:04:05Z
 
-Run only the synthetic test suite:
+| Metric | Value |
+| --- | --- |
+| Load average (1m / 5m / 15m) | 0.42 / 0.36 / 0.31 |
+| RAM total / available (bytes) | 16777216000 / 9437184000 |
+| Root filesystem total / available (bytes) | 512000000000 / 256000000000 |
+| Uptime (seconds) | 86400 |
+```
 
-    PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover -s tests -v
+## Testing and engineering
 
-**Validated on 2026-10-30:** 37/37 synthetic tests passed on each of two Linux/KDE neon machines running Python 3.12.3. SHA256 checks matched all **12 files in the earlier P2 snapshot** on both machines. Ten of those files (code, tests, synthetic example and .gitignore) are unchanged in this release; README.md and pyproject.toml were subsequently updated for P3, while LICENSE and docs/engineering-workflow.md were added. The final **14-file publication tree was audited locally**, not re-tested cross-host. The second machine used an isolated temporary in-memory copy, removed after testing.
+**CI:** GitHub Actions runs the 37 synthetic unit tests on Python **3.10, 3.11 and 3.12** (three successful jobs in the [initial matrix run](https://github.com/BRMff/linux-health-reporter/actions/runs/41246975792)).
 
-The tests inject synthetic `/proc`, disk and clock responses. They **do not execute the unmocked collector or validate live metrics**. Python 3.10 and 3.11 syntax was checked, but execution under those interpreters remains unverified. No deployment, performance, security-certification or production-availability claim is implied.
+Run the same synthetic tests locally:
 
-The separate model review identified a small backlog of non-blocking test-coverage and input-hardening notes; see [Engineering workflow](docs/engineering-workflow.md).
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover -s tests -v
+```
 
-## Engineering provenance
+This project was developed with **human-defined requirements and approvals, AI-assisted implementation, synthetic regression tests and a separate model review**. The application itself is a conventional CLI; it does not run an AI model.
 
-This standalone portfolio tool was designed and supervised by **Fábio Folgado** with AI-assisted coding, human-authorized changes, synthetic regression tests and independent second-model review. The human owner defined the scope, evaluated the findings and approved each modification. The repository documents the process without asserting that the CLI itself is agentic.
+Read the [engineering workflow and validation evidence](docs/engineering-workflow.md) for the review process, earlier cross-host verification, documented findings and their precise scope.
 
-See [Engineering workflow](docs/engineering-workflow.md) for the development and review approach, evidence boundaries and known limitations.
+## Known limitations
+
+- **Experimental utility**, not a production-certified monitoring system. Its first public release is `v0.1.0`.
+- The 37 tests use injected synthetic `/proc`, filesystem and clock inputs. Passing on Python 3.10–3.12 demonstrates test-suite execution, **not** end-to-end validation of live system metrics, installation or distribution builds.
+- Load average is not CPU utilisation. Filesystem capacity covers only the filesystem containing `/`, and available space is reported for an unprivileged user.
+- There is no scheduler, daemon, network reporting or background monitoring.
+- Even without identifying fields, real timestamps and measurements may reveal usage patterns. **Review reports before sharing them publicly.**
 
 ## License
 
-Licensed under the [MIT License](LICENSE). Copyright (c) 2026 Fábio Folgado.
-
-The runtime remains standard-library only. The build configuration declares `setuptools>=77` for modern project/license metadata; this is a **build-time**, not runtime, dependency.
+[MIT License](LICENSE) · Copyright © 2026 Fábio Folgado.
