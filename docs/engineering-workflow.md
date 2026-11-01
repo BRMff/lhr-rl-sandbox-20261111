@@ -48,12 +48,16 @@ Expected for v0.2.0: **106 passing tests**. (The v0.1.0 baseline was 37.)
 
 Test inputs simulate `/proc`, `statvfs`, clocks and CLI collection through dependency injection or mocks. They are not live system-health readings.
 
-### Evidence snapshot: v0.2.0 (2026-11-01, pre-merge)
+### Evidence snapshot: v0.2.0 (2026-11-01)
+
+Merged through PR #1 (merge commit `a908457`, tree identical to the reviewed head `1ef507c`). CI on `main` after the merge: 6/6 jobs green.
+
+Initial evidence, before review:
 
 - **94/94 synthetic tests** passed locally on Python 3.10, 3.11, 3.12, 3.13 and 3.14 (interpreters provided by `uv`), and from an extracted sdist.
 - **12 deliberate code mutations** (for example: treating permission errors as `unsupported`, counting `unsupported` as a failure, accepting PSI values above 100, reporting CPU `full`, reading `/proc/swaps`, reordering v0.1 keys, leaking an exception message) were each detected by the suite.
 - A **contract test** compares v0.2 output with the unmodified v0.1.0 sample: all v0.1 keys keep their values, types and order; only `schema_version` differs.
-- Package build was reproduced locally with setuptools (sdist → wheel), installed in a clean virtual environment and smoke-tested (`--help`, `--version`, invalid arguments, synthetic import checks). The CI job repeats this with `python -m build` on GitHub-hosted runners.
+- Package build was reproduced locally with setuptools (sdist → wheel), installed in a clean virtual environment and smoke-tested (`--help`, `--version`, invalid arguments, synthetic import checks). The CI job repeats this on GitHub-hosted runners with pinned, hash-verified build tools.
 - No collection was run against a real host for this evidence.
 
 ### Independent review: v0.2.0, round 1
@@ -67,10 +71,22 @@ A separate model performed a static review of PR #1 (verdict: hold, one major fi
 - **R-06, fixed:** a PSI block marked `ok` without window objects counts as a failure for the exit code.
 - **R-08, fixed:** byte formatting uses integer arithmetic; very large values no longer overflow Markdown rendering.
 - **R-09, fixed:** the clock is read before any source again, matching v0.1.
-- **R-04 (pinning of CI actions and build tools):** implemented after an explicit owner decision — actions pinned by commit SHA (verified against the official `actions/*` repositories), hash-pinned build tools from PyPI file details, a dedicated build environment with `--no-isolation`, and weekly Dependabot proposals. Closure depends on review of that implementation and its CI evidence. `pyproject_hooks` is pinned at 1.2.0 because the 1.3.3 file details could not be retrieved from PyPI at the time; the upgrade is left to a Dependabot pull request.
-- **R-07:** PR description updated with the CI run.
+- **R-04, fixed after an explicit owner decision:** actions pinned by commit SHA (verified against the official `actions/*` repositories), hash-pinned build tools from PyPI file details, a dedicated build environment with `--no-isolation`, a separate install environment, and weekly Dependabot proposals without auto-merge. `pyproject_hooks` was pinned at 1.2.0 because the 1.3.3 file details could not be retrieved from PyPI at the time; Dependabot proposed the upgrade after the merge.
+- **R-07, fixed:** PR description updated with each CI run.
 
 Every fix was verified by reverting it and confirming that at least one test fails. Of the reviewer's six suggested surviving mutations, five are now detected; the sixth describes the intended behaviour after R-01.
+
+### Independent review: v0.2.0, rounds 2 and 3
+
+- **Round 2** (`460b308..d68fdd9`): pass with reservations. The hold was lifted; R-04 remained open for an owner decision.
+- **Round 3** (`d68fdd9..1ef507c`): pass. R-04 resolved within the agreed scope; **R-01 to R-09 closed**. The reviewer confirmed the action SHAs, the four wheel hashes against PyPI, and that the CI-tested merge commit had the same tree as the reviewed head.
+
+Scope notes recorded by the reviewer:
+
+- The PyPI JSON API and the file-details page are two views of the same authority, not independent sources.
+- Pinning covers the agreed build dependencies only; the Python patch version, the runner image and the `pip` bundled in each virtual environment are not pinned.
+- A deliberately wrong hash was not exercised in CI; the job relies on pip's documented `--require-hashes` verification, with no fallback.
+- Claims about CI data are limited to this project: no collection of real metrics by Linux Health Reporter was identified in the reviewed steps.
 
 ### Evidence snapshot: v0.1.0 (2026-10-30)
 

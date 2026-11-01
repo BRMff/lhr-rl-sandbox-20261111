@@ -3,7 +3,7 @@
 All notable changes to this project are documented here.
 The JSON schema is described in [docs/schema.md](docs/schema.md).
 
-## [0.2.0] — unreleased
+## [0.2.0] — 2026-11-01
 
 ### Added
 - `swap` metric (`total_bytes`, `free_bytes`) from `/proc/meminfo`. A system
