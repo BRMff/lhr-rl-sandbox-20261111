@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - name: Checkout
@@ -36,3 +36,60 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python -B -m unittest discover -s tests -v
+
+  package:
+    # Builds and installs the package, then smoke-tests the installed CLI.
+    # It never runs a collection on the runner: no real host telemetry.
+    name: Build, install and smoke test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install build
+          python -m build
+
+      - name: Inspect wheel contents and metadata
+        id: wheel
+        run: python -I ci/check_wheel.py dist/*.whl >> "$GITHUB_OUTPUT"
+
+      - name: Install wheel in a clean virtual environment
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install dist/*.whl
+          "$RUNNER_TEMP/venv/bin/python" -m pip check
+
+      - name: Smoke test CLI (help, version, argument errors only)
+        working-directory: ${{ runner.temp }}
+        env:
+          EXPECTED_VERSION: ${{ steps.wheel.outputs.version }}
+        run: |
+          set -euo pipefail
+          cli="$RUNNER_TEMP/venv/bin/linux-health-reporter"
+          help_text="$("$cli" --help)"
+          grep -q -- "--format" <<<"$help_text"
+          test "$("$cli" --version)" = "linux-health-reporter $EXPECTED_VERSION"
+          if "$cli" --format xml 2>/dev/null; then
+            echo "invalid format was accepted" >&2
+            exit 1
+          else
+            status=$?
+            test "$status" -eq 2
+          fi
+
+      - name: Exercise installed package with synthetic inputs
+        working-directory: ${{ runner.temp }}
+        run: '"$RUNNER_TEMP/venv/bin/python" -I "$GITHUB_WORKSPACE/ci/smoke_installed.py"'
