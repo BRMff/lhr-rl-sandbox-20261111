@@ -1,0 +1,22 @@
+# Build tooling for the CI "package" job only (not a runtime dependency).
+#
+# Exact versions, one hash per pinned py3-none-any wheel. Each SHA256 was taken
+# from the file details on the official PyPI project page
+# (https://pypi.org/project/<name>/) on 2026-11-01.
+#
+# Installed with: pip install --require-hashes --only-binary :all: -r ci/requirements-build.txt
+# A missing or mismatching hash makes pip refuse the install and fails the job.
+# Updates arrive as Dependabot pull requests (weekly) and are reviewed by the owner.
+
+build==1.6.1 \
+    --hash=sha256:ecd351a4be9d35a9eaaba244a7687143c9c7d4aea6ac964e7e7ddab20cbcf4e7
+    # file: build-1.6.1-py3-none-any.whl
+packaging==26.3 \
+    --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
+    # file: packaging-26.3-py3-none-any.whl
+pyproject_hooks==1.2.0 \
+    --hash=sha256:9e5c6bfa8dcc30091c74b0cf803c81fdd29d94f01992a7707bc97babb1141913
+    # file: pyproject_hooks-1.2.0-py3-none-any.whl
+setuptools==84.2.1 \
+    --hash=sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2
+    # file: setuptools-84.2.1-py3-none-any.whl

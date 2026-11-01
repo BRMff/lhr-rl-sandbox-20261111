@@ -1,0 +1,20 @@
+# Weekly update proposals only. Dependabot opens pull requests; nothing is
+# merged automatically. The main-branch ruleset still requires a pull request
+# and the six CI checks, and the owner decides on every merge.
+version: 2
+updates:
+  # Actions are pinned by full commit SHA with the version in a comment.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+
+  # Hash-pinned build tooling for the CI package job (ci/requirements-build.txt).
+  - package-ecosystem: "pip"
+    directory: "/ci"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"

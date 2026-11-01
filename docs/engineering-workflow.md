@@ -67,7 +67,7 @@ A separate model performed a static review of PR #1 (verdict: hold, one major fi
 - **R-06, fixed:** a PSI block marked `ok` without window objects counts as a failure for the exit code.
 - **R-08, fixed:** byte formatting uses integer arithmetic; very large values no longer overflow Markdown rendering.
 - **R-09, fixed:** the clock is read before any source again, matching v0.1.
-- **R-04 (pinning of CI actions and build tools):** deferred to an explicit owner decision.
+- **R-04 (pinning of CI actions and build tools):** implemented after an explicit owner decision — actions pinned by commit SHA (verified against the official `actions/*` repositories), hash-pinned build tools from PyPI file details, a dedicated build environment with `--no-isolation`, and weekly Dependabot proposals. Closure depends on review of that implementation and its CI evidence. `pyproject_hooks` is pinned at 1.2.0 because the 1.3.3 file details could not be retrieved from PyPI at the time; the upgrade is left to a Dependabot pull request.
 - **R-07:** PR description updated with the CI run.
 
 Every fix was verified by reverting it and confirming that at least one test fails. Of the reviewer's six suggested surviving mutations, five are now detected; the sixth describes the intended behaviour after R-01.

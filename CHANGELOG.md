@@ -17,6 +17,11 @@ The JSON schema is described in [docs/schema.md](docs/schema.md).
 - CI: Python 3.13 and 3.14, and a job that builds the sdist and wheel,
   installs the wheel in a clean environment and smoke-tests the CLI without
   collecting data from the CI runner.
+- CI supply chain: GitHub Actions pinned by full commit SHA; build tools
+  installed only from `ci/requirements-build.txt` (exact versions, wheel
+  hashes, `--require-hashes --only-binary :all:`) in a dedicated build
+  environment, with `python -m build --no-isolation`; weekly Dependabot
+  update proposals for both, never merged automatically.
 
 ### Changed
 - JSON `schema_version` is `"0.2"`. All 0.1 keys keep their name, type, unit,
