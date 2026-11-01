@@ -151,6 +151,26 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(result["timestamp_utc"], "2026-01-02T03:04:05Z")
         self.assertFalse(has_unavailable(result))
 
+    def test_clock_is_read_before_any_source(self):
+        # Review R-09: as in v0.1, the timestamp marks the start of collection.
+        events = []
+
+        def reader(path):
+            events.append(path)
+            return SYNTHETIC[path]
+
+        def clock():
+            events.append("clock")
+            return synthetic_clock()
+
+        def statvfs(path):
+            events.append("statvfs")
+            return SYNTHETIC_DISK
+
+        collect_snapshot(read_text=reader, statvfs=statvfs, clock=clock)
+        self.assertEqual(events[0], "clock")
+        self.assertEqual(events.count("clock"), 1)
+
     def test_metric_read_errors_are_private_unavailable(self):
         def reader(path):
             if path == "/proc/meminfo":

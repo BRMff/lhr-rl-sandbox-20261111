@@ -54,7 +54,7 @@ def main() -> int:
         "swap ok without swap": parsed["swap"] == {"status": "ok", "total_bytes": 0, "free_bytes": 0},
         "io unsupported": parsed["pressure"]["io"]["status"] == "unsupported",
         "unsupported is not a failure": not has_unavailable(snapshot),
-        "markdown renders": "Not supported by kernel" in render_markdown(snapshot),
+        "markdown renders": "Interface not exposed" in render_markdown(snapshot),
     }
     failed = [name for name, ok in checks.items() if not ok]
     if failed:

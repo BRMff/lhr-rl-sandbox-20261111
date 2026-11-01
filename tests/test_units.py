@@ -24,12 +24,21 @@ class FormatBytesTests(unittest.TestCase):
             16777216000: "15.6 GiB",
             512000000000: "476.8 GiB",
             1099511627776: "1.0 TiB",
+            2 ** 50: "1.0 PiB",
             2 ** 60: "1.0 EiB",
             2 ** 70: "1024.0 EiB",  # largest unit is not promoted further
+            1280: "1.3 KiB",  # 1.25 KiB: tenths round half up
+            1126: "1.1 KiB",  # 1.0996 KiB
         }
         for value, expected in cases.items():
             with self.subTest(value=value):
                 self.assertEqual(format_bytes(value), expected)
+
+    def test_huge_values_do_not_overflow(self):
+        # Review R-08: integer arithmetic only; no float conversion.
+        text = format_bytes(10 ** 400)
+        self.assertTrue(text.endswith(" EiB"))
+        self.assertTrue(text.startswith("8673617379884035"))
 
     def test_rejects_invalid_values(self):
         for value in (-1, 1.5, True, None, "1024", float("nan")):

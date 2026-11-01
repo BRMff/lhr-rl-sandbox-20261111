@@ -85,6 +85,39 @@ class PressureParserTests(unittest.TestCase):
         self.assertNotIn("total", result["some"])
         self.assertNotIn("avg900", result["some"])
 
+    def test_cpu_full_line_never_affects_cpu_some(self):
+        # Review R-01: the CPU "full" line is skipped before any validation.
+        some = "some avg10=1 avg60=2 avg300=3 total=10\n"
+        cases = {
+            "nan": "full avg10=nan avg60=0 avg300=0 total=0\n",
+            "above 100": "full avg10=101 avg60=0 avg300=0 total=0\n",
+            "garbage": "full this is not psi\n",
+            "missing averages": "full total=0\n",
+            "duplicate full": "full avg10=0 avg60=0 avg300=0\nfull avg10=0 avg60=0 avg300=0\n",
+            "two malformed full": "full avg10=x\nfull =\n",
+        }
+        for name, full in cases.items():
+            for text in (some + full, full + some):
+                with self.subTest(case=name, order=text.split()[0]):
+                    self.assertEqual(
+                        parse_pressure(text, "cpu"),
+                        {"status": "ok", "some": {"avg10": 1.0, "avg60": 2.0, "avg300": 3.0}},
+                    )
+
+    def test_memory_and_io_validate_full_line(self):
+        some = "some avg10=1 avg60=1 avg300=1 total=1\n"
+        cases = {
+            "above 100": "full avg10=101 avg60=0 avg300=0 total=0\n",
+            "nan": "full avg10=nan avg60=0 avg300=0 total=0\n",
+            "negative": "full avg10=0 avg60=-1 avg300=0 total=0\n",
+            "missing avg300": "full avg10=0 avg60=0 total=0\n",
+            "duplicate full": "full avg10=0 avg60=0 avg300=0\nfull avg10=0 avg60=0 avg300=0\n",
+        }
+        for resource in ("memory", "io"):
+            for name, full in cases.items():
+                with self.subTest(resource=resource, case=name), self.assertRaises(ValueError):
+                    parse_pressure(some + full, resource)
+
     def test_rejects_malformed_input(self):
         good_full = "full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"
         cases = {
@@ -153,6 +186,9 @@ class PressureCollectionTests(unittest.TestCase):
     def test_other_read_errors_are_unavailable(self):
         for error in (
             os_error(errno.EIO),
+            os_error(errno.ENOTDIR),  # only ENOENT/EOPNOTSUPP mean "not exposed"
+            NotADirectoryError(errno.ENOTDIR, SECRET),
+            IsADirectoryError(errno.EISDIR, SECRET),
             OSError(SECRET),  # no errno at all
             UnicodeDecodeError("ascii", b"\xff", 0, 1, SECRET),
         ):
@@ -193,9 +229,15 @@ class PressureCollectionTests(unittest.TestCase):
     def test_has_unavailable_treats_unknown_or_missing_pressure_as_failure(self):
         cases = {
             "unknown status": lambda s: s["pressure"]["cpu"].update(status="error"),
-            "missing resource": lambda s: s["pressure"].pop("io"),
+            "missing cpu": lambda s: s["pressure"].pop("cpu"),
+            "missing memory": lambda s: s["pressure"].pop("memory"),
+            "missing io": lambda s: s["pressure"].pop("io"),
             "missing section": lambda s: s.pop("pressure"),
             "non-dict section": lambda s: s.update(pressure=None),
+            # Review R-06: "ok" without a window object is not a valid block.
+            "ok cpu with null some": lambda s: s["pressure"].update(cpu={"status": "ok", "some": None}),
+            "ok io without full": lambda s: s["pressure"]["io"].pop("full"),
+            "ok memory with scalar full": lambda s: s["pressure"]["memory"].update(full=0.0),
         }
         for name, mutate in cases.items():
             with self.subTest(case=name):

@@ -20,18 +20,20 @@ def _require_non_negative_int(value: object, name: str) -> int:
 def format_bytes(value: object) -> str:
     """Format a byte count with IEC binary units and one decimal place.
 
-    Values below 1 KiB are shown as whole bytes. A value that rounds up to
-    1024 of a unit is promoted to the next unit (1048575 B -> "1.0 MiB").
+    Values below 1 KiB are shown as whole bytes. Tenths are rounded half up
+    using integer arithmetic, so arbitrarily large counts never overflow. A
+    value that rounds up to 1024 of a unit is promoted to the next unit
+    (1048575 B -> "1.0 MiB"); the largest unit is never promoted.
     """
     size = _require_non_negative_int(value, "byte count")
     if size < 1024:
         return f"{size} B"
-    scaled = float(size)
-    for index, unit in enumerate(_IEC_UNITS):
-        scaled /= 1024
-        is_last = index == len(_IEC_UNITS) - 1
-        if round(scaled, 1) < 1024 or is_last:
-            return f"{scaled:.1f} {unit}"
+    for index, unit in enumerate(_IEC_UNITS, start=1):
+        divisor = 1024 ** index
+        tenths = (size * 10 + divisor // 2) // divisor
+        if tenths < 10240 or index == len(_IEC_UNITS):
+            whole, fraction = divmod(tenths, 10)
+            return f"{whole}.{fraction} {unit}"
     raise AssertionError("unreachable")  # pragma: no cover
 
 

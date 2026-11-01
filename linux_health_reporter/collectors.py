@@ -160,8 +160,11 @@ def parse_pressure(text: str, resource: str) -> dict:
         if not fields:
             continue
         kind = fields[0]
-        if kind not in ("some", "full"):
-            continue  # unknown future line kinds are ignored
+        if kind not in expected:
+            # Unknown line kinds and lines not reported for this resource
+            # (the system-wide CPU "full" line) are skipped before validation,
+            # so they can never affect the reported lines.
+            continue
         if kind in lines:
             raise ValueError("duplicate pressure line")
         lines[kind] = _parse_pressure_line(fields[1:])
@@ -241,12 +244,15 @@ def collect_snapshot(
     Keys present in schema 0.1 keep their order and meaning; keys added in 0.2
     (swap, pressure) are appended after them.
     """
+    # As in v0.1, the timestamp marks the start of collection: the clock is
+    # read before any metric source.
+    timestamp = _timestamp(clock)
     loadavg = _safe_text("/proc/loadavg", read_text)
     meminfo = _safe_text("/proc/meminfo", read_text)  # read once, parsed twice
     uptime = _safe_text("/proc/uptime", read_text)
     return {
         "schema_version": SCHEMA_VERSION,
-        "timestamp_utc": _timestamp(clock),
+        "timestamp_utc": timestamp,
         "load_average": _safe_parse(loadavg, parse_loadavg, METRIC_FIELDS["load_average"]),
         "memory": _safe_parse(meminfo, parse_meminfo, METRIC_FIELDS["memory"]),
         "disk_root": _safe_disk(statvfs),
@@ -261,8 +267,10 @@ def collect_snapshot(
 def has_unavailable(snapshot: dict) -> bool:
     """True if any applicable reading failed.
 
-    PSI blocks marked "unsupported" are not failures: the kernel simply does
-    not expose that interface, so they do not change the exit code.
+    Intended for snapshots produced by collect_snapshot(). PSI blocks marked
+    "unsupported" are not failures: the interface is simply not exposed, so
+    they do not change the exit code. A PSI block claiming "ok" without a
+    window object for each reported line is treated as a failure.
     """
     # The timestamp is missing if it is None or an empty string.
     if not snapshot.get("timestamp_utc"):
@@ -272,8 +280,13 @@ def has_unavailable(snapshot: dict) -> bool:
     pressure = snapshot.get("pressure")
     if not isinstance(pressure, dict):
         return True
-    return any(
-        not isinstance(pressure.get(resource), dict)
-        or pressure[resource].get("status") not in (STATUS_OK, STATUS_UNSUPPORTED)
-        for resource in PRESSURE_LINES
-    )
+    for resource, kinds in PRESSURE_LINES.items():
+        block = pressure.get(resource)
+        if not isinstance(block, dict):
+            return True
+        status = block.get("status")
+        if status == STATUS_UNSUPPORTED:
+            continue
+        if status != STATUS_OK or not all(isinstance(block.get(kind), dict) for kind in kinds):
+            return True
+    return False

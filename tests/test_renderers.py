@@ -64,10 +64,27 @@ class RendererTests(unittest.TestCase):
         snapshot["pressure"]["memory"] = {"status": "unsupported", "some": None, "full": None}
         snapshot["pressure"]["io"] = {"status": "unavailable", "some": None, "full": None}
         text = render_markdown(snapshot)
-        self.assertIn("| CPU | Not supported by kernel | n/a |", text)
-        self.assertIn("| Memory | Not supported by kernel | Not supported by kernel |", text)
+        self.assertIn("| CPU | Interface not exposed | n/a |", text)
+        self.assertIn("| Memory | Interface not exposed | Interface not exposed |", text)
         self.assertIn("| I/O | Unavailable | Unavailable |", text)
         self.assertNotIn("None", text)
+
+    def test_markdown_renders_huge_values_accepted_by_the_collector(self):
+        # Review R-08: a corrupted but well-formed /proc/meminfo can yield
+        # enormous integers; JSON and Markdown must both still render.
+        from linux_health_reporter.collectors import collect_snapshot
+        from tests.test_collectors import SYNTHETIC, synthetic_clock, synthetic_statvfs
+
+        huge = 10 ** 398
+        meminfo = f"MemTotal: {huge} kB\nMemAvailable: {huge} kB\nSwapTotal: {huge} kB\nSwapFree: 0 kB\n"
+        source = dict(SYNTHETIC, **{"/proc/meminfo": meminfo})
+        snapshot = collect_snapshot(
+            read_text=lambda path: source[path], statvfs=synthetic_statvfs, clock=synthetic_clock
+        )
+        self.assertEqual(snapshot["memory"]["status"], "ok")
+        self.assertIn("| Memory available |", render_markdown(snapshot))
+        self.assertIn("(100.0 %)", render_markdown(snapshot))
+        self.assertEqual(json.loads(render_json(snapshot))["memory"]["total_bytes"], huge * 1024)
 
     def test_markdown_tolerates_missing_pressure_section(self):
         snapshot = synthetic_snapshot()

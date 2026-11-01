@@ -12,7 +12,9 @@ from .collectors import PRESSURE_LINES
 from .units import format_bytes, format_duration, format_percent, format_ratio_triplet
 
 UNAVAILABLE = "Unavailable"
-UNSUPPORTED = "Not supported by kernel"
+# "unsupported" means the PSI interface is not exposed here. That can be the
+# kernel or the runtime/container, so the label does not claim a cause.
+UNSUPPORTED = "Interface not exposed"
 NOT_APPLICABLE = "n/a"
 
 _PRESSURE_ROWS = (("cpu", "CPU"), ("memory", "Memory"), ("io", "I/O"))
