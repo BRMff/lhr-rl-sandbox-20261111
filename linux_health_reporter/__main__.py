@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 
+from . import __version__
 from .collectors import collect_snapshot, has_unavailable
 from .renderers import render_json, render_markdown
 
@@ -18,7 +19,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--format",
         choices=("json", "markdown"),
         default="json",
-        help="Output format (default: json).",
+        help="Output format (default: json). JSON is the stable structured interface.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     args = parser.parse_args(argv)
     snapshot = collect_snapshot()

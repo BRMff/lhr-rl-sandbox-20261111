@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import unittest
 
 from linux_health_reporter.collectors import (
+    PROC_SOURCES,
     collect_snapshot,
     has_unavailable,
     parse_disk_statvfs,
@@ -16,8 +17,23 @@ from linux_health_reporter.collectors import (
 
 SYNTHETIC = {
     "/proc/loadavg": "0.42 0.36 0.31 1/160 99\n",
-    "/proc/meminfo": "MemTotal: 16384000 kB\nMemFree: 256000 kB\nMemAvailable: 9216000 kB\n",
+    "/proc/meminfo": (
+        "MemTotal: 16384000 kB\nMemFree: 256000 kB\nMemAvailable: 9216000 kB\n"
+        "SwapCached: 0 kB\nSwapTotal: 2097152 kB\nSwapFree: 1992294 kB\n"
+    ),
     "/proc/uptime": "86400.84 303.10\n",
+    "/proc/pressure/cpu": (
+        "some avg10=1.25 avg60=0.80 avg300=0.40 total=123456\n"
+        "full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"
+    ),
+    "/proc/pressure/memory": (
+        "some avg10=0.50 avg60=0.25 avg300=0.10 total=2000\n"
+        "full avg10=0.20 avg60=0.10 avg300=0.05 total=1000\n"
+    ),
+    "/proc/pressure/io": (
+        "some avg10=3.00 avg60=2.50 avg300=1.75 total=3000\n"
+        "full avg10=1.50 avg60=1.25 avg300=0.75 total=1500\n"
+    ),
 }
 SYNTHETIC_DISK = SimpleNamespace(f_frsize=4096, f_blocks=125000000, f_bavail=62500000)
 
@@ -128,11 +144,10 @@ class CollectionTests(unittest.TestCase):
             return SYNTHETIC_DISK
 
         result = collect_snapshot(read_text=reader, statvfs=statvfs, clock=synthetic_clock)
-        self.assertEqual(
-            actual_reads, ["/proc/loadavg", "/proc/meminfo", "/proc/uptime"]
-        )
+        # v0.2: each allowlisted source is read exactly once (meminfo included).
+        self.assertEqual(actual_reads, list(PROC_SOURCES))
         self.assertEqual(actual_stat_calls, ["/"])
-        self.assertEqual(result["schema_version"], "0.1")
+        self.assertEqual(result["schema_version"], "0.2")
         self.assertEqual(result["timestamp_utc"], "2026-01-02T03:04:05Z")
         self.assertFalse(has_unavailable(result))
 

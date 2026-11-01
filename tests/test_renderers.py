@@ -7,6 +7,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
+from linux_health_reporter import __version__
 from linux_health_reporter.__main__ import main
 from linux_health_reporter.renderers import render_json, render_markdown
 from tests.test_collectors import synthetic_snapshot
@@ -17,7 +18,7 @@ class RendererTests(unittest.TestCase):
         snapshot = synthetic_snapshot()
         text = render_json(snapshot)
         self.assertEqual(json.loads(text), snapshot)
-        self.assertIn('"schema_version": "0.1"', text)
+        self.assertIn('"schema_version": "0.2"', text)
 
     def test_sample_json_matches_synthetic_fixture(self):
         sample = Path(__file__).resolve().parents[1] / "examples" / "sample.json"
@@ -30,7 +31,50 @@ class RendererTests(unittest.TestCase):
         self.assertIn("# Linux Health Report", text)
         self.assertIn("2026-01-02T03:04:05Z", text)
         self.assertIn("Load average (1m / 5m / 15m)", text)
-        self.assertIn("512000000000 / 256000000000", text)
+        self.assertIn("## Pressure stall information", text)
+
+    def test_markdown_uses_human_readable_values(self):
+        text = render_markdown(synthetic_snapshot())
+        # 9437184000 B of 16777216000 B, swap 2040109056 of 2147483648 B,
+        # disk 256000000000 of 512000000000 B, uptime 86400 s.
+        expected_rows = (
+            "| Load average (1m / 5m / 15m) | 0.42 / 0.36 / 0.31 |",
+            "| Memory available | 8.8 GiB of 15.6 GiB (56.2 %) |",
+            "| Swap free | 1.9 GiB of 2.0 GiB (95.0 %) |",
+            "| Root filesystem available | 238.4 GiB of 476.8 GiB (50.0 %) |",
+            "| Uptime | 1 d 00 h 00 min |",
+            "| CPU | 1.25 / 0.80 / 0.40 % | n/a |",
+            "| Memory | 0.50 / 0.25 / 0.10 % | 0.20 / 0.10 / 0.05 % |",
+            "| I/O | 3.00 / 2.50 / 1.75 % | 1.50 / 1.25 / 0.75 % |",
+        )
+        for row in expected_rows:
+            with self.subTest(row=row):
+                self.assertIn(row, text)
+        # Raw byte counts stay in JSON; Markdown shows the readable form only.
+        self.assertNotIn("16777216000", text)
+
+    def test_markdown_without_swap(self):
+        snapshot = synthetic_snapshot()
+        snapshot["swap"] = {"status": "ok", "total_bytes": 0, "free_bytes": 0}
+        self.assertIn("| Swap free | No swap configured |", render_markdown(snapshot))
+
+    def test_markdown_distinguishes_unsupported_from_unavailable(self):
+        snapshot = synthetic_snapshot()
+        snapshot["pressure"]["cpu"] = {"status": "unsupported", "some": None}
+        snapshot["pressure"]["memory"] = {"status": "unsupported", "some": None, "full": None}
+        snapshot["pressure"]["io"] = {"status": "unavailable", "some": None, "full": None}
+        text = render_markdown(snapshot)
+        self.assertIn("| CPU | Not supported by kernel | n/a |", text)
+        self.assertIn("| Memory | Not supported by kernel | Not supported by kernel |", text)
+        self.assertIn("| I/O | Unavailable | Unavailable |", text)
+        self.assertNotIn("None", text)
+
+    def test_markdown_tolerates_missing_pressure_section(self):
+        snapshot = synthetic_snapshot()
+        del snapshot["pressure"]
+        text = render_markdown(snapshot)
+        self.assertIn("| CPU | Unavailable | n/a |", text)
+        self.assertIn("| I/O | Unavailable | Unavailable |", text)
 
     def test_unavailable_renders_without_raw_exception(self):
         snapshot = synthetic_snapshot()
@@ -40,8 +84,8 @@ class RendererTests(unittest.TestCase):
             "available_bytes": None,
         }
         rendered = render_markdown(snapshot)
-        self.assertIn("Unavailable", rendered)
-        self.assertNotIn("None / None", rendered)
+        self.assertIn("| Memory available | Unavailable |", rendered)
+        self.assertNotIn("None", rendered)
 
 
 class CLITests(unittest.TestCase):
@@ -94,6 +138,46 @@ class CLITests(unittest.TestCase):
                     main(["--help"])
         self.assertEqual(caught.exception.code, 0)
         self.assertIn("--format", output.getvalue())
+
+    def test_version_returns_zero_before_collection(self):
+        output = StringIO()
+        with patch(
+            "linux_health_reporter.__main__.collect_snapshot",
+            side_effect=AssertionError("collector must not run"),
+        ):
+            with contextlib.redirect_stdout(output):
+                with self.assertRaises(SystemExit) as caught:
+                    main(["--version"])
+        self.assertEqual(caught.exception.code, 0)
+        self.assertEqual(output.getvalue().strip(), f"linux-health-reporter {__version__}")
+
+    def test_unsupported_pressure_keeps_exit_code_zero(self):
+        snapshot = synthetic_snapshot()
+        snapshot["pressure"] = {
+            "cpu": {"status": "unsupported", "some": None},
+            "memory": {"status": "unsupported", "some": None, "full": None},
+            "io": {"status": "unsupported", "some": None, "full": None},
+        }
+        with patch("linux_health_reporter.__main__.collect_snapshot", return_value=snapshot):
+            with contextlib.redirect_stdout(StringIO()):
+                self.assertEqual(main([]), 0)
+
+    def test_unavailable_pressure_or_swap_returns_one(self):
+        cases = {
+            "pressure": lambda s: s["pressure"].update(
+                io={"status": "unavailable", "some": None, "full": None}
+            ),
+            "swap": lambda s: s.update(
+                swap={"status": "unavailable", "total_bytes": None, "free_bytes": None}
+            ),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(metric=name):
+                snapshot = synthetic_snapshot()
+                mutate(snapshot)
+                with patch("linux_health_reporter.__main__.collect_snapshot", return_value=snapshot):
+                    with contextlib.redirect_stdout(StringIO()):
+                        self.assertEqual(main([]), 1)
 
     def test_empty_timestamp_cli_returns_one(self):
         snapshot = synthetic_snapshot()

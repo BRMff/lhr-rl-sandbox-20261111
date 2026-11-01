@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "linux-health-reporter"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Read-only Linux health snapshots in JSON and Markdown"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -18,11 +18,16 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: System :: Monitoring",
 ]
 
 [project.scripts]
 linux-health-reporter = "linux_health_reporter.__main__:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "linux_health_reporter.__version__"}
 
 [tool.setuptools.packages.find]
 include = ["linux_health_reporter*"]

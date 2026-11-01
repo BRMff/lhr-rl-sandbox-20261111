@@ -1,5 +1,5 @@
 {
-  "schema_version": "0.1",
+  "schema_version": "0.2",
   "timestamp_utc": "2026-01-02T03:04:05Z",
   "load_average": {
     "status": "ok",
@@ -20,5 +20,46 @@
   "uptime": {
     "status": "ok",
     "uptime_seconds": 86400
+  },
+  "swap": {
+    "status": "ok",
+    "total_bytes": 2147483648,
+    "free_bytes": 2040109056
+  },
+  "pressure": {
+    "cpu": {
+      "status": "ok",
+      "some": {
+        "avg10": 1.25,
+        "avg60": 0.8,
+        "avg300": 0.4
+      }
+    },
+    "memory": {
+      "status": "ok",
+      "some": {
+        "avg10": 0.5,
+        "avg60": 0.25,
+        "avg300": 0.1
+      },
+      "full": {
+        "avg10": 0.2,
+        "avg60": 0.1,
+        "avg300": 0.05
+      }
+    },
+    "io": {
+      "status": "ok",
+      "some": {
+        "avg10": 3.0,
+        "avg60": 2.5,
+        "avg300": 1.75
+      },
+      "full": {
+        "avg10": 1.5,
+        "avg60": 1.25,
+        "avg300": 0.75
+      }
+    }
   }
 }
