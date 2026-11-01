@@ -12,6 +12,7 @@ from tests.test_collectors import synthetic_snapshot
 
 # Exact output allowlist: unknown keys and nested objects must fail the tests.
 # This is a test contract, not runtime validation of untrusted external input.
+WINDOW = object()  # PSI window: null or {avg10, avg60, avg300}; checked separately.
 PUBLIC_SCHEMA = {
     "schema_version": None,
     "timestamp_utc": None,
@@ -19,12 +20,22 @@ PUBLIC_SCHEMA = {
     "memory": {"status": None, "total_bytes": None, "available_bytes": None},
     "disk_root": {"status": None, "total_bytes": None, "available_bytes": None},
     "uptime": {"status": None, "uptime_seconds": None},
+    "swap": {"status": None, "total_bytes": None, "free_bytes": None},
+    "pressure": {
+        "cpu": {"status": None, "some": WINDOW},
+        "memory": {"status": None, "some": WINDOW, "full": WINDOW},
+        "io": {"status": None, "some": WINDOW, "full": WINDOW},
+    },
 }
+SCALAR_METRICS = ("load_average", "memory", "disk_root", "uptime", "swap")
+PRESSURE_WINDOWS = ("avg10", "avg60", "avg300")
 
 
 class PrivacyTests(unittest.TestCase):
     def assert_public_schema(self, snapshot):
         def check(value, expected, location):
+            if expected is WINDOW:
+                return
             if isinstance(expected, dict):
                 self.assertIsInstance(value, dict, location)
                 self.assertEqual(set(value), set(expected), location)
@@ -34,7 +45,7 @@ class PrivacyTests(unittest.TestCase):
                 self.assertNotIsInstance(value, (dict, list, tuple, set), location)
 
         check(snapshot, PUBLIC_SCHEMA, "snapshot")
-        self.assertEqual(snapshot["schema_version"], "0.1")
+        self.assertEqual(snapshot["schema_version"], "0.2")
         ts = snapshot["timestamp_utc"]
         if ts is not None:
             self.assertIsInstance(ts, str)
@@ -50,8 +61,9 @@ class PrivacyTests(unittest.TestCase):
             except ValueError as exc:
                 self.fail(f"timestamp_utc contains an invalid calendar date: {exc}")
 
-        for name in ("load_average", "memory", "disk_root", "uptime"):
+        for name in SCALAR_METRICS:
             metric = snapshot[name]
+            # "unsupported" is reserved for PSI blocks and never valid here.
             self.assertIn(metric["status"], ("ok", "unavailable"))
             for key, value in metric.items():
                 if key == "status":
@@ -59,7 +71,7 @@ class PrivacyTests(unittest.TestCase):
                 location = name + "." + key
                 if metric["status"] == "unavailable":
                     self.assertIsNone(value, location)
-                elif name == "uptime" or name in ("memory", "disk_root"):
+                elif name in ("uptime", "memory", "disk_root", "swap"):
                     self.assertIs(type(value), int, location)
                     self.assertGreaterEqual(value, 0, location)
                 else:
@@ -72,6 +84,25 @@ class PrivacyTests(unittest.TestCase):
                 self.assertLessEqual(
                     metric["available_bytes"], metric["total_bytes"], name
                 )
+            if metric["status"] == "ok" and name == "swap":
+                self.assertLessEqual(metric["free_bytes"], metric["total_bytes"], name)
+
+        for resource, block in snapshot["pressure"].items():
+            self.assertIn(block["status"], ("ok", "unavailable", "unsupported"), resource)
+            for kind in (key for key in block if key != "status"):
+                location = f"pressure.{resource}.{kind}"
+                window = block[kind]
+                if block["status"] != "ok":
+                    self.assertIsNone(window, location)
+                    continue
+                self.assertIsInstance(window, dict, location)
+                self.assertEqual(set(window), set(PRESSURE_WINDOWS), location)
+                for average in PRESSURE_WINDOWS:
+                    value = window[average]
+                    self.assertIs(type(value), float, location + "." + average)
+                    self.assertTrue(math.isfinite(value), location)
+                    self.assertGreaterEqual(value, 0, location)
+                    self.assertLessEqual(value, 100, location)
 
     def test_schema_does_not_include_identifying_fields(self):
         self.assert_public_schema(synthetic_snapshot())
@@ -149,6 +180,54 @@ class PrivacyTests(unittest.TestCase):
         for name in ("memory", "disk_root"):
             snapshot[name]["available_bytes"] = snapshot[name]["total_bytes"]
         self.assert_public_schema(snapshot)
+
+    def test_schema_accepts_unsupported_and_unavailable_pressure(self):
+        snapshot = synthetic_snapshot()
+        snapshot["pressure"]["cpu"] = {"status": "unsupported", "some": None}
+        snapshot["pressure"]["io"] = {"status": "unavailable", "some": None, "full": None}
+        self.assert_public_schema(snapshot)
+
+    def test_schema_accepts_system_without_swap(self):
+        snapshot = synthetic_snapshot()
+        snapshot["swap"] = {"status": "ok", "total_bytes": 0, "free_bytes": 0}
+        self.assert_public_schema(snapshot)
+
+    def test_schema_rejects_invalid_swap_and_pressure(self):
+        def set_path(snapshot, path, value):
+            target = snapshot
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+
+        cases = (
+            (("swap", "free_bytes"), 10 ** 20),          # free > total
+            (("swap", "total_bytes"), -1),
+            (("swap", "free_bytes"), 1.5),
+            (("swap", "status"), "unsupported"),         # reserved for PSI
+            (("memory", "status"), "unsupported"),
+            (("pressure", "cpu", "full"), None),          # CPU full is never reported
+            (("pressure", "cpu", "status"), "error"),
+            (("pressure", "memory", "reason"), "permission denied"),
+            (("pressure", "io", "some", "avg10"), 100.5),
+            (("pressure", "io", "some", "avg60"), -0.1),
+            (("pressure", "io", "full", "avg300"), float("nan")),
+            (("pressure", "memory", "some", "avg10"), "test-host.example.invalid"),
+            (("pressure", "memory", "some", "avg10"), 1),  # must be float
+            (("pressure", "memory", "full", "total"), 12345),
+            (("pressure", "hostname"), "test-host.example.invalid"),
+        )
+        for path, value in cases:
+            with self.subTest(path=path, value=repr(value)):
+                snapshot = synthetic_snapshot()
+                set_path(snapshot, path, value)
+                with self.assertRaises(AssertionError):
+                    self.assert_public_schema(snapshot)
+
+    def test_schema_rejects_values_in_non_ok_pressure_block(self):
+        snapshot = synthetic_snapshot()
+        snapshot["pressure"]["memory"]["status"] = "unsupported"
+        with self.assertRaises(AssertionError):
+            self.assert_public_schema(snapshot)
 
     def test_report_contains_only_synthetic_measurements(self):
         report = render_json(synthetic_snapshot())

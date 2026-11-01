@@ -19,16 +19,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -36,3 +36,70 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python -B -m unittest discover -s tests -v
+
+  package:
+    # Builds and installs the package, then smoke-tests the installed CLI.
+    # It never runs a collection on the runner: no real host telemetry.
+    name: Build, install and smoke test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      # Build tools come only from ci/requirements-build.txt: exact versions,
+      # wheel-only, every download checked against its pinned SHA256.
+      - name: Create build environment (pinned, hash-verified)
+        run: |
+          python -m venv "$RUNNER_TEMP/build-venv"
+          "$RUNNER_TEMP/build-venv/bin/python" -m pip install --require-hashes --only-binary :all: -r ci/requirements-build.txt
+          "$RUNNER_TEMP/build-venv/bin/python" -m pip check
+          "$RUNNER_TEMP/build-venv/bin/python" -m pip list --format=freeze
+
+      # --no-isolation: the backend is the pinned setuptools from the build
+      # environment, not a separately resolved copy.
+      - name: Build sdist and wheel
+        run: '"$RUNNER_TEMP/build-venv/bin/python" -m build --no-isolation'
+
+      - name: Inspect wheel contents and metadata
+        id: wheel
+        run: python -I ci/check_wheel.py dist/*.whl >> "$GITHUB_OUTPUT"
+
+      # Separate from the build environment: only the built wheel is installed.
+      - name: Install wheel in a clean virtual environment
+        run: |
+          python -m venv "$RUNNER_TEMP/install-venv"
+          "$RUNNER_TEMP/install-venv/bin/python" -m pip install --no-index dist/*.whl
+          "$RUNNER_TEMP/install-venv/bin/python" -m pip check
+
+      - name: Smoke test CLI (help, version, argument errors only)
+        working-directory: ${{ runner.temp }}
+        env:
+          EXPECTED_VERSION: ${{ steps.wheel.outputs.version }}
+        run: |
+          set -euo pipefail
+          cli="$RUNNER_TEMP/install-venv/bin/linux-health-reporter"
+          help_text="$("$cli" --help)"
+          grep -q -- "--format" <<<"$help_text"
+          test "$("$cli" --version)" = "linux-health-reporter $EXPECTED_VERSION"
+          if "$cli" --format xml 2>/dev/null; then
+            echo "invalid format was accepted" >&2
+            exit 1
+          else
+            status=$?
+            test "$status" -eq 2
+          fi
+
+      - name: Exercise installed package with synthetic inputs
+        working-directory: ${{ runner.temp }}
+        run: '"$RUNNER_TEMP/install-venv/bin/python" -I "$GITHUB_WORKSPACE/ci/smoke_installed.py"'

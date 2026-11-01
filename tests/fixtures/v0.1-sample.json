@@ -1,0 +1,24 @@
+{
+  "schema_version": "0.1",
+  "timestamp_utc": "2026-01-02T03:04:05Z",
+  "load_average": {
+    "status": "ok",
+    "1m": 0.42,
+    "5m": 0.36,
+    "15m": 0.31
+  },
+  "memory": {
+    "status": "ok",
+    "total_bytes": 16777216000,
+    "available_bytes": 9437184000
+  },
+  "disk_root": {
+    "status": "ok",
+    "total_bytes": 512000000000,
+    "available_bytes": 256000000000
+  },
+  "uptime": {
+    "status": "ok",
+    "uptime_seconds": 86400
+  }
+}
