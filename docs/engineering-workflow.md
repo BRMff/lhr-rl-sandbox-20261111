@@ -44,7 +44,7 @@ From the project root, run:
 
     PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover -s tests -v
 
-Expected for v0.2.0: **94 passing tests**. (The v0.1.0 baseline was 37.)
+Expected for v0.2.0: **106 passing tests**. (The v0.1.0 baseline was 37.)
 
 Test inputs simulate `/proc`, `statvfs`, clocks and CLI collection through dependency injection or mocks. They are not live system-health readings.
 
@@ -55,6 +55,22 @@ Test inputs simulate `/proc`, `statvfs`, clocks and CLI collection through depen
 - A **contract test** compares v0.2 output with the unmodified v0.1.0 sample: all v0.1 keys keep their values, types and order; only `schema_version` differs.
 - Package build was reproduced locally with setuptools (sdist → wheel), installed in a clean virtual environment and smoke-tested (`--help`, `--version`, invalid arguments, synthetic import checks). The CI job repeats this with `python -m build` on GitHub-hosted runners.
 - No collection was run against a real host for this evidence.
+
+### Independent review: v0.2.0, round 1
+
+A separate model performed a static review of PR #1 (verdict: hold, one major finding). Each finding was reproduced with synthetic inputs before being addressed:
+
+- **R-01 (major), fixed:** a malformed CPU `full` line made CPU pressure `unavailable`. The line is now skipped before validation.
+- **R-02, fixed:** the Markdown label for `unsupported` no longer asserts a kernel cause ("Interface not exposed").
+- **R-03, fixed:** the v0.1 fixture is pinned by SHA-256; contract tests added for failure shapes and a second input set.
+- **R-05, fixed:** the CI wheel check accepts only the expected `.dist-info` directory and an explicit member list, with unit tests.
+- **R-06, fixed:** a PSI block marked `ok` without window objects counts as a failure for the exit code.
+- **R-08, fixed:** byte formatting uses integer arithmetic; very large values no longer overflow Markdown rendering.
+- **R-09, fixed:** the clock is read before any source again, matching v0.1.
+- **R-04 (pinning of CI actions and build tools):** deferred to an explicit owner decision.
+- **R-07:** PR description updated with the CI run.
+
+Every fix was verified by reverting it and confirming that at least one test fails. Of the reviewer's six suggested surviving mutations, five are now detected; the sixth describes the intended behaviour after R-01.
 
 ### Evidence snapshot: v0.1.0 (2026-10-30)
 

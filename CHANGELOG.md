@@ -24,10 +24,16 @@ The JSON schema is described in [docs/schema.md](docs/schema.md).
 - Markdown output uses readable units (GiB, percentages, days/hours/minutes)
   and includes a PSI table. Markdown is a presentation format, not a contract:
   scripts that parsed the 0.1 Markdown table must switch to JSON.
+- Markdown labels PSI blocks marked `unsupported` as "Interface not exposed"
+  (the cause can be the kernel or the runtime). Byte values use integer
+  arithmetic with tenths rounded half up.
 - `/proc/meminfo` is read once and parsed independently for memory and swap.
+- The CPU PSI `full` line is skipped before validation, so it can never make
+  CPU pressure `unavailable`.
 - The package version has a single source (`linux_health_reporter.__version__`).
 
 ### Unchanged
+- The timestamp is still taken before any metric source is read, as in 0.1.
 - Read-only, standard-library-only runtime; no shell, network, services or
   writes.
 - Exit codes `0`, `1` and `2` keep their meaning.

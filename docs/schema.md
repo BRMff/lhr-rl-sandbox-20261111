@@ -18,7 +18,7 @@ units may change between versions and must not be parsed by scripts.
 | Key | Type | Since | Description |
 | --- | --- | --- | --- |
 | `schema_version` | string | 0.1 | `"0.2"` |
-| `timestamp_utc` | string or `null` | 0.1 | Collection time, `YYYY-MM-DDTHH:MM:SSZ`. `null` if the clock was unavailable or not timezone-aware. |
+| `timestamp_utc` | string or `null` | 0.1 | Start of collection (taken before any source is read), `YYYY-MM-DDTHH:MM:SSZ`. `null` if the clock was unavailable or not timezone-aware. |
 | `load_average` | object | 0.1 | See below. |
 | `memory` | object | 0.1 | See below. |
 | `disk_root` | object | 0.1 | See below. |
@@ -76,6 +76,7 @@ Invariants when `status` is `ok`: `memory` and `disk_root` have
   seconds. `some` means at least one task was stalled; `full` means all
   non-idle tasks were stalled at the same time.
 - CPU `full` is not reported. At system level the kernel defines it as zero.
+  The line is skipped before validation, so its content never affects `cpu`.
 - The cumulative `total` counter is not reported.
 - Each resource is collected independently.
 
