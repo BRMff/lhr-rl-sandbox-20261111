@@ -4,9 +4,9 @@
 
 **A lightweight, read-only Python CLI for Linux health snapshots — in JSON or Markdown.**
 
-Get a quick view of system load, memory, root filesystem space and uptime without deploying a monitoring service. Output is written to standard output, ready to inspect or use in scripts. The runtime uses only the Python standard library.
+Get a quick view of system load, memory, swap, root filesystem space, uptime and kernel pressure stall information (PSI) without deploying a monitoring service. Output is written to standard output, ready to inspect or use in scripts. The runtime uses only the Python standard library.
 
-**Release:** [v0.1.0 (experimental)](https://github.com/BRMff/linux-health-reporter/releases/tag/v0.1.0) · **License:** [MIT](LICENSE)
+**Releases:** [GitHub releases](https://github.com/BRMff/linux-health-reporter/releases) · **Changes:** [CHANGELOG](CHANGELOG.md) · **License:** [MIT](LICENSE)
 
 ## What it reports
 
@@ -14,20 +14,22 @@ Get a quick view of system load, memory, root filesystem space and uptime withou
 | --- | --- |
 | Load average (1, 5 and 15 minutes) | `/proc/loadavg` |
 | Total and available RAM | `/proc/meminfo` |
+| Total and free swap | `/proc/meminfo` |
 | Root filesystem capacity and available space | `os.statvfs("/")` |
 | System uptime | `/proc/uptime` |
+| CPU, memory and I/O pressure (PSI) | `/proc/pressure/*` |
 | UTC collection timestamp | Python clock |
 
-- Choose **JSON** for scripts and **Markdown** for readable summaries.
-- Each metric has an explicit `ok` or `unavailable` status; unavailable values are `null`, not invented zeros.
-- The fixed report schema excludes hostnames, IP addresses, usernames, device identifiers and raw exception messages.
+- **JSON** is the stable, versioned interface for scripts; its contract is documented in [docs/schema.md](docs/schema.md). **Markdown** is a readable summary whose layout may change.
+- Each metric has an explicit status: `ok`, `unavailable` (collection failed; values are `null`, never invented zeros) or, for PSI only, `unsupported` (the kernel does not expose the interface).
+- The fixed report schema excludes hostnames, IP addresses, usernames, device names, paths and raw exception messages. `/proc/swaps` is never read.
 - Collection is read-only and does not start services, execute shell commands, contact a network or write reports to disk.
 
 ## Quick start
 
 **Requirements:** Linux and Python 3.10 or newer.
 
-From a terminal:
+Run from a clone, without installing:
 
 ```bash
 git clone https://github.com/BRMff/linux-health-reporter.git
@@ -36,44 +38,19 @@ python3 -B -m linux_health_reporter --format json
 python3 -B -m linux_health_reporter --format markdown
 ```
 
-No package installation is needed. `-B` prevents Python bytecode-cache writes. The CLI itself prints to stdout; saving output is an explicit choice.
+Or install the command from the clone (for example with `pipx install .`) and run `linux-health-reporter --format markdown`.
 
-Exit codes: `0` = complete snapshot; `1` = one or more unavailable readings (including timestamp); `2` = invalid CLI arguments.
+`-B` prevents Python bytecode-cache writes. The CLI prints to stdout; saving output is an explicit choice.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Complete snapshot (PSI marked `unsupported` still counts as complete) |
+| `1` | The timestamp or at least one applicable reading is unavailable |
+| `2` | Invalid command-line arguments |
 
 ## Example output
 
-Both examples below use the **same synthetic fixture**, not measurements taken from a real computer.
-
-### JSON
-
-```json
-{
-  "schema_version": "0.1",
-  "timestamp_utc": "2026-01-02T03:04:05Z",
-  "load_average": {
-    "status": "ok",
-    "1m": 0.42,
-    "5m": 0.36,
-    "15m": 0.31
-  },
-  "memory": {
-    "status": "ok",
-    "total_bytes": 16777216000,
-    "available_bytes": 9437184000
-  },
-  "disk_root": {
-    "status": "ok",
-    "total_bytes": 512000000000,
-    "available_bytes": 256000000000
-  },
-  "uptime": {
-    "status": "ok",
-    "uptime_seconds": 86400
-  }
-}
-```
-
-[View the versioned JSON fixture](examples/sample.json).
+Both examples use the **same synthetic fixture**, not measurements taken from a real computer.
 
 ### Markdown
 
@@ -85,29 +62,59 @@ Generated (UTC): 2026-01-02T03:04:05Z
 | Metric | Value |
 | --- | --- |
 | Load average (1m / 5m / 15m) | 0.42 / 0.36 / 0.31 |
-| RAM total / available (bytes) | 16777216000 / 9437184000 |
-| Root filesystem total / available (bytes) | 512000000000 / 256000000000 |
-| Uptime (seconds) | 86400 |
+| Memory available | 8.8 GiB of 15.6 GiB (56.2 %) |
+| Swap free | 1.9 GiB of 2.0 GiB (95.0 %) |
+| Root filesystem available | 238.4 GiB of 476.8 GiB (50.0 %) |
+| Uptime | 1 d 00 h 00 min |
+
+## Pressure stall information
+
+Share of time tasks were stalled, averaged over 10 s / 60 s / 300 s.
+
+| Resource | Some | Full |
+| --- | --- | --- |
+| CPU | 1.25 / 0.80 / 0.40 % | n/a |
+| Memory | 0.50 / 0.25 / 0.10 % | 0.20 / 0.10 / 0.05 % |
+| I/O | 3.00 / 2.50 / 1.75 % | 1.50 / 1.25 / 0.75 % |
 ```
+
+### JSON (abridged)
+
+```json
+{
+  "schema_version": "0.2",
+  "timestamp_utc": "2026-01-02T03:04:05Z",
+  "memory": {"status": "ok", "total_bytes": 16777216000, "available_bytes": 9437184000},
+  "swap": {"status": "ok", "total_bytes": 2147483648, "free_bytes": 2040109056},
+  "pressure": {
+    "cpu": {"status": "ok", "some": {"avg10": 1.25, "avg60": 0.8, "avg300": 0.4}},
+    "memory": {"status": "ok", "some": {"avg10": 0.5, "avg60": 0.25, "avg300": 0.1}, "full": {"avg10": 0.2, "avg60": 0.1, "avg300": 0.05}},
+    "io": {"status": "ok", "some": {"avg10": 3.0, "avg60": 2.5, "avg300": 1.75}, "full": {"avg10": 1.5, "avg60": 1.25, "avg300": 0.75}}
+  }
+}
+```
+
+The full report also contains `load_average`, `disk_root` and `uptime`; see the [complete synthetic fixture](examples/sample.json).
 
 ## Testing and engineering
 
-**CI:** GitHub Actions runs the 37 synthetic unit tests on Python **3.10, 3.11 and 3.12** (three successful jobs in the [initial matrix run](https://github.com/BRMff/linux-health-reporter/actions/runs/41246975792)).
+**CI:** GitHub Actions runs the synthetic unit tests on Python **3.10 to 3.14**, then builds the sdist and wheel, installs the wheel in a clean environment and smoke-tests the installed CLI. The smoke test never collects data from the CI runner.
 
-Run the same synthetic tests locally:
+Run the tests locally:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover -s tests -v
 ```
 
-This project was developed with **human-defined requirements and approvals, AI-assisted implementation, synthetic regression tests and a separate model review**. The application itself is a conventional CLI; it does not run an AI model.
+This project is developed with **human-defined requirements and approvals, AI-assisted implementation, synthetic regression tests and a separate model review**. The application itself is a conventional CLI; it does not run an AI model.
 
-Read the [engineering workflow and validation evidence](docs/engineering-workflow.md) for the review process, earlier cross-host verification, documented findings and their precise scope.
+See the [engineering workflow and validation evidence](docs/engineering-workflow.md) for the review process and the scope of each piece of evidence.
 
 ## Known limitations
 
-- **Experimental utility**, not a production-certified monitoring system. Its first public release is `v0.1.0`.
-- The 37 tests use injected synthetic `/proc`, filesystem and clock inputs. Passing on Python 3.10–3.12 demonstrates test-suite execution, **not** end-to-end validation of live system metrics, installation or distribution builds.
+- **Experimental utility**, not a production-certified monitoring system.
+- Tests use injected synthetic `/proc`, filesystem and clock inputs. They verify parsing, classification and output, **not** live metrics on real hardware.
+- Inside containers, memory, swap and PSI values often describe the host unless the runtime virtualises them.
 - Load average is not CPU utilisation. Filesystem capacity covers only the filesystem containing `/`, and available space is reported for an unprivileged user.
 - There is no scheduler, daemon, network reporting or background monitoring.
 - Even without identifying fields, real timestamps and measurements may reveal usage patterns. **Review reports before sharing them publicly.**
