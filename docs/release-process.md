@@ -18,7 +18,7 @@ Governance limits are described in [governance.md](governance.md).
    |---|---|
    | P1 | `sha` is the current `main` head |
    | P2 | the required CI checks succeeded on `sha` |
-   | P3 | every first-parent commit since the previous release tag is a supported merge (see below) of a PR whose head had `review-gate: success`. The walk must end at a previous post-gate release tag, or at `GATE_BASELINE` through the verified gate introduction |
+   | P3 | every first-parent commit between `sha` and `GATE_BASELINE` is a supported merge (see below) of a PR whose head had `review-gate: success`. The walk always reaches `GATE_BASELINE` through the verified gate introduction; earlier release tags are never stopping points |
    | P4 | the tag matches `__version__`, and `CHANGELOG.md` has a dated entry for that version |
    | P5 | the tag does not exist yet |
 
@@ -58,6 +58,15 @@ presence or absence of a workflow file:
 
 `main` is protected against force pushes and deletion, so these anchors stay verifiable.
 API errors, invalid anchors, or a history that does not reach `GATE_BASELINE` are a **FAIL**.
+
+P3 always walks the whole first-parent history back to `GATE_BASELINE` (at most
+`MAX_WALK` = 1000 commits; beyond that it fails closed). It never stops at an earlier
+release tag, valid or not, because a tag does not prove that the merges before it passed
+the gate. Consequently, **one unapproved or unsupported merge on `main` makes P3 fail for
+every later release.** There is no automatic recovery and no exception mechanism. Moving
+the historical boundary requires a documented incident, an explicit owner decision, an
+independent review and preserved evidence. The walk limit can be revised separately,
+without changing the anchors.
 
 **Only merge commits are supported.** Each first-parent commit after `GATE_BASELINE` must:
 
