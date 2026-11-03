@@ -30,10 +30,32 @@ BASE_BRANCH = "main"
 GATE_BOT = "github-actions[bot]"
 RELEASE_GATE_PATH = ".github/workflows/release-gate.yml"
 RELEASE_AUDIT_PATH = ".github/workflows/release-audit.yml"
-REVIEW_GATE_PATH = ".github/workflows/review-gate.yml"
 REVIEW_CONTEXT = "review-gate"
 PREFLIGHT_CONTEXT = "release-preflight/{tag}"
 MAX_WALK = 1000
+
+# Historical anchors (F01/F02). Pre-gate status is decided only by these
+# fixed, verifiable values, never by the presence or absence of a workflow
+# file. main is protected against force pushes and deletion, so these
+# commits stay on its first-parent history.
+#
+# Tags published before the gates existed, pinned to their full commit SHA.
+# Any other v* tag gets the complete T1-T4 verification.
+PRE_GATE_TAGS = {
+    "v0.1.0": "2895ccd9864e8c4d02bd9e5dd473717c3d61c5f8",
+    "v0.2.0": "a0616c83560ed40bd24280465014292a268872c4",
+}
+# The main head on which the governance pull request was based. Commits
+# at or before it on the first-parent history of main are pre-gate.
+GATE_BASELINE = "dea0ac9379cc688b3ff9edce16f17bf41c29d747"
+# The single exception (C3): the merge of the pull request that introduced
+# the gates. It cannot carry a review-gate status because the reconciler
+# only runs from main. Its first parent must be GATE_BASELINE, and the
+# owner's record of the out-of-band review must be present.
+GATE_INTRODUCTION_PR = 4
+GATE_INTRODUCTION_RECORD = "docs/governance-introduction.md"
+RECORD_REVIEW_RE = re.compile(r"LHR-[A-Z0-9-]+ = PASS(_WITH_FINDINGS)?")
+RECORD_AUTHORIZATION_RE = re.compile(r"LHR-[A-Z0-9-]+ = AUTHORIZED(_[A-Z_]+)?")
 
 # Required checks of pushes to main. Must match the job names of
 # .github/workflows/tests.yml (enforced by tests/test_governance_workflows.py).
@@ -117,17 +139,31 @@ def tag_commit(client, repo: str, tag: str) -> str | None:
     raise ApiError("tag nesting too deep")
 
 
-def first_parent(client, repo: str, sha: str) -> str | None:
+def anchors_valid() -> bool:
+    return (
+        valid_sha(GATE_BASELINE)
+        and isinstance(GATE_INTRODUCTION_PR, int)
+        and GATE_INTRODUCTION_PR > 0
+        and isinstance(PRE_GATE_TAGS, dict)
+        and bool(PRE_GATE_TAGS)
+        and all(valid_tag(tag) and valid_sha(commit) for tag, commit in PRE_GATE_TAGS.items())
+    )
+
+
+def commit_parents(client, repo: str, sha: str) -> list[str]:
     commit = client.get(f"/repos/{repo}/commits/{sha}")
     parents = commit.get("parents") if isinstance(commit, dict) else None
     if not isinstance(parents, list):
         raise ApiError("malformed commit")
-    if not parents:
-        return None
-    parent = parents[0].get("sha") if isinstance(parents[0], dict) else None
-    if not valid_sha(parent):
+    shas = [p.get("sha") if isinstance(p, dict) else None for p in parents]
+    if not all(valid_sha(p) for p in shas):
         raise ApiError("malformed parent")
-    return parent
+    return shas
+
+
+def first_parent(client, repo: str, sha: str) -> str | None:
+    parents = commit_parents(client, repo, sha)
+    return parents[0] if parents else None
 
 
 def on_main_first_parent(client, repo: str, sha: str) -> bool:
@@ -186,10 +222,12 @@ def check_version(client, repo: str, sha: str, tag: str, report: Report) -> None
 
 
 def other_tag_commits(client, repo: str, exclude: str | None) -> set[str]:
+    """Commits of previous post-gate releases. Pinned pre-gate tags are not
+    stopping points: the walk must reach GATE_BASELINE instead."""
     commits = set()
     for item in client.get_all(f"/repos/{repo}/tags"):
         name = item.get("name") if isinstance(item, dict) else None
-        if valid_tag(name) and name != exclude:
+        if valid_tag(name) and name != exclude and name not in PRE_GATE_TAGS:
             sha = (item.get("commit") or {}).get("sha")
             if not valid_sha(sha):
                 raise ApiError("malformed tag listing")
@@ -197,36 +235,126 @@ def other_tag_commits(client, repo: str, exclude: str | None) -> set[str]:
     return commits
 
 
-def check_reviews(client, repo: str, sha: str, exclude_tag: str | None, report: Report) -> None:
-    """P3: every PR merged since the previous v* tag had review-gate success
-    on its merged head, unless it was merged before the gate existed."""
-    stop = other_tag_commits(client, repo, exclude_tag)
-    current: str | None = sha
-    for _ in range(MAX_WALK):
-        if current is None or current in stop:
-            return
-        pulls = client.get_all(f"/repos/{repo}/commits/{current}/pulls")
-        merged = [
-            pr for pr in pulls
-            if isinstance(pr, dict)
-            and pr.get("merge_commit_sha") == current
-            and pr.get("merged_at")
-            and (pr.get("base") or {}).get("ref") == BASE_BRANCH
-        ]
-        parent = first_parent(client, repo, current)
-        if len(merged) != 1:
-            report.fail(f"P3 commit {current[:7]} is not the merge of exactly one PR into main")
-        elif parent is None or not file_exists(client, repo, REVIEW_GATE_PATH, parent):
-            report.info(f"P3 PR #{merged[0].get('number')} merged before the review gate existed (pre-gate)")
+def merged_pull(client, repo: str, commit: str) -> dict | None:
+    pulls = client.get_all(f"/repos/{repo}/commits/{commit}/pulls")
+    merged = [
+        pr for pr in pulls
+        if isinstance(pr, dict)
+        and pr.get("merge_commit_sha") == commit
+        and pr.get("merged_at")
+        and (pr.get("base") or {}).get("ref") == BASE_BRANCH
+    ]
+    return merged[0] if len(merged) == 1 else None
+
+
+def read_record(text: str) -> dict[str, str] | None:
+    """Parse the gate-introduction record: one ``key: value`` line per key,
+    each key exactly once."""
+    keys = ("gate-introduction-pr", "head-sha", "merge-commit-sha", "independent-review", "owner-authorization")
+    record = {}
+    for key in keys:
+        found = re.findall(r"^" + re.escape(key) + r": (.+?)[ \t]*$", text, re.MULTILINE)
+        if len(found) != 1:
+            return None
+        record[key] = found[0]
+    return record
+
+
+def check_gate_introduction(client, repo: str, commit: str, parents: list[str], evidence_ref: str, report: Report) -> bool:
+    """C3: the single exception, for the merge of the PR that introduced the
+    gates. Every condition must hold; anything else is a FAIL."""
+    label = f"P3 gate introduction PR #{GATE_INTRODUCTION_PR} at {commit[:7]}"
+    if parents[0] != GATE_BASELINE:
+        report.fail(f"{label}: first parent is not GATE_BASELINE; main moved before the merge, a new owner decision is required")
+        return False
+    pr = client.get(f"/repos/{repo}/pulls/{GATE_INTRODUCTION_PR}")
+    problems = []
+    if not isinstance(pr, dict) or pr.get("number") != GATE_INTRODUCTION_PR:
+        problems.append("pull request number")
+        pr = {}
+    if pr.get("merged") is not True or not pr.get("merged_at"):
+        problems.append("not merged")
+    if (pr.get("base") or {}).get("ref") != BASE_BRANCH or ((pr.get("base") or {}).get("repo") or {}).get("full_name") != repo:
+        problems.append("base is not main")
+    if pr.get("merge_commit_sha") != commit:
+        problems.append("merge_commit_sha")
+    if (pr.get("head") or {}).get("sha") != parents[1]:
+        problems.append("second parent is not the final PR head")
+    if not file_exists(client, repo, GATE_INTRODUCTION_RECORD, evidence_ref):
+        problems.append(f"{GATE_INTRODUCTION_RECORD} missing")
+    else:
+        record = read_record(file_text(client, repo, GATE_INTRODUCTION_RECORD, evidence_ref))
+        if record is None:
+            problems.append("record malformed")
         else:
-            head = (merged[0].get("head") or {}).get("sha")
-            if not valid_sha(head):
-                report.fail(f"P3 PR #{merged[0].get('number')} has no valid head")
-            elif latest_status_ok(client, repo, head, REVIEW_CONTEXT):
-                report.ok(f"P3 PR #{merged[0].get('number')} review-gate success at {head[:7]}")
+            if record["gate-introduction-pr"] != str(GATE_INTRODUCTION_PR):
+                problems.append("record PR")
+            if record["head-sha"] != parents[1]:
+                problems.append("record head-sha")
+            if record["merge-commit-sha"] != commit:
+                problems.append("record merge-commit-sha")
+            if not RECORD_REVIEW_RE.fullmatch(record["independent-review"]):
+                problems.append("record independent-review")
+            if not RECORD_AUTHORIZATION_RE.fullmatch(record["owner-authorization"]):
+                problems.append("record owner-authorization")
+    if problems:
+        report.fail(f"{label} invalid: {', '.join(problems)}")
+        return False
+    report.ok(f"{label} verified (reviewed out of band, recorded in {GATE_INTRODUCTION_RECORD})")
+    return True
+
+
+def check_merge(client, repo: str, commit: str, parents: list[str], evidence_ref: str, report: Report) -> bool:
+    """One first-parent commit after GATE_BASELINE. Only merge commits are
+    supported: two parents, the merge of exactly one PR into main, and the
+    second parent equal to that PR's head. Returns True only for a verified
+    gate introduction."""
+    if len(parents) != 2:
+        report.fail(
+            f"P3 commit {commit[:7]} has {len(parents)} parent(s): unsupported merge method "
+            "(only merge commits; squash, rebase, octopus and direct pushes are rejected)"
+        )
+        return False
+    pr = merged_pull(client, repo, commit)
+    if pr is None:
+        report.fail(f"P3 commit {commit[:7]} is not the merge of exactly one PR into main")
+        return False
+    number = pr.get("number")
+    head = (pr.get("head") or {}).get("sha")
+    if not valid_sha(head) or head != parents[1]:
+        report.fail(f"P3 PR #{number} at {commit[:7]}: second parent is not the PR head")
+        return False
+    if number == GATE_INTRODUCTION_PR:
+        return check_gate_introduction(client, repo, commit, parents, evidence_ref, report)
+    if latest_status_ok(client, repo, head, REVIEW_CONTEXT):
+        report.ok(f"P3 PR #{number} review-gate success at {head[:7]}")
+    else:
+        report.fail(f"P3 PR #{number} without review-gate success at {head[:7]}")
+    return False
+
+
+def check_reviews(client, repo: str, sha: str, exclude_tag: str | None, report: Report) -> None:
+    """P3: walk the first-parent history from ``sha`` back to the previous
+    post-gate release tag, or to GATE_BASELINE through the verified gate
+    introduction. Reaching the baseline any other way, or the root, is a FAIL."""
+    stop = other_tag_commits(client, repo, exclude_tag)
+    current = sha
+    came_from_introduction = False
+    for _ in range(MAX_WALK):
+        if current == GATE_BASELINE:
+            if came_from_introduction:
+                report.info(f"P3 history at or before GATE_BASELINE {GATE_BASELINE[:7]} is pre-gate")
             else:
-                report.fail(f"P3 PR #{merged[0].get('number')} without review-gate success at {head[:7]}")
-        current = parent
+                report.fail(f"P3 reached GATE_BASELINE {GATE_BASELINE[:7]} without the gate introduction merge")
+            return
+        if current in stop:
+            return
+        parents = commit_parents(client, repo, current)
+        if not parents:
+            report.fail(f"P3 history from {sha[:7]} does not reach GATE_BASELINE {GATE_BASELINE[:7]}")
+            return
+        came_from_introduction = check_merge(client, repo, current, parents, sha, report)
+        current = parents[0]
     raise ApiError("first-parent walk limit reached")
 
 
@@ -350,8 +478,12 @@ def audit(env: dict, client, repo: str, server: str, report: Report) -> None:
         if commit is None:
             report.fail(f"T1 {tag} could not be resolved")
             continue
-        if not file_exists(client, repo, RELEASE_GATE_PATH, commit):
-            report.info(f"{tag} predates the release gate (pre-gate)")
+        pinned = PRE_GATE_TAGS.get(tag)
+        if pinned is not None:
+            if commit == pinned:
+                report.info(f"{tag} predates the release gate (pre-gate, pinned at {pinned[:7]})")
+            else:
+                report.fail(f"T1 pre-gate tag {tag} resolves to {commit[:7]}, pinned {pinned[:7]}")
             continue
         if not on_main_first_parent(client, repo, commit):
             report.fail(f"T2 {tag} ({commit[:7]}) is not on the main first-parent history")
@@ -409,6 +541,10 @@ def run(mode: str, env: dict, client_factory) -> int:
             return _finish(report, env)
     elif mode != "audit" or event not in ("schedule", "workflow_dispatch"):
         report.fail("inputs: unsupported mode or event")
+        return _finish(report, env)
+
+    if not anchors_valid():
+        report.fail("anchors: pre-gate tags, GATE_BASELINE or gate introduction are inconsistent")
         return _finish(report, env)
 
     try:

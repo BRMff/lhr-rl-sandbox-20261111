@@ -4,42 +4,62 @@ import base64
 import copy
 import inspect
 import unittest
+from unittest import mock
 
 from tests.governance_support import BOT, OWNER, REPO, github_api, release_gate as rel, sha, ts
 
+# Synthetic first-parent history of main:
+#   C00 (v0.1.0) <- C0 (v0.2.0) <- C1 (GATE_BASELINE) <- C2 (merge of PR #4, gate introduction)
+#   <- C3 (merge of PR #5) <- C4 (merge of PR #6); OFF is a commit outside main.
 C00, C0, C1, C2, C3, C4, OFF = (sha(n) for n in (0x100, 0x101, 0x102, 0x103, 0x104, 0x105, 0x1FF))
-H5 = sha(0x205)
-GATE_FILES = (".github/workflows/review-gate.yml", ".github/workflows/release-gate.yml")
+H4, H5, H6 = sha(0x204), sha(0x205), sha(0x206)
+RECORD = rel.GATE_INTRODUCTION_RECORD
+REAL_ANCHORS = (dict(rel.PRE_GATE_TAGS), rel.GATE_BASELINE, rel.GATE_INTRODUCTION_PR)
 
 
 def b64(text):
     return {"encoding": "base64", "content": base64.b64encode(text.encode()).decode()}
 
 
+def record_text(pr="4", head=H4, merge=C2, review="LHR-GOV-PR4-R2 = PASS", auth="LHR-GOV-PR4-MERGE = AUTHORIZED"):
+    return (
+        "# Gate introduction record\n\n"
+        f"gate-introduction-pr: {pr}\n"
+        f"head-sha: {head}\n"
+        f"merge-commit-sha: {merge}\n"
+        f"independent-review: {review}\n"
+        f"owner-authorization: {auth}\n"
+    )
+
+
 class FakeRepo:
     def __init__(self):
         self.head = C3
-        self.parents = {C00: [], C0: [C00], C1: [C0], C2: [C1], C3: [C2], C4: [C3], OFF: [C3]}
+        self.parents = {C00: [], C0: [C00], C1: [C0, sha(0x302)], C2: [C1, H4], C3: [C2, H5], C4: [C3, H6], OFF: [C3]}
         self.files = {}
-        for commit in (C2, C3, C4, OFF):
-            for path in GATE_FILES:
-                self.files[(path, commit)] = "workflow"
         for commit in (C00, C0, C1, C2, C3, C4, OFF):
             self.files[("linux_health_reporter/__init__.py", commit)] = '__version__ = "0.3.0"\n'
             self.files[("CHANGELOG.md", commit)] = "# Changelog\n\n## [0.3.0] — 2026-11-10\n"
+        for commit in (C3, C4, OFF):
+            self.files[(RECORD, commit)] = record_text()
+        self.content_paths = []
         self.tags = {"v0.1.0": {"type": "commit", "sha": C00}, "v0.2.0": {"type": "commit", "sha": C0}}
         self.annotated = {}
         self.check_runs = {c: [self.run_check(name, i) for i, name in enumerate(rel.MAIN_REQUIRED_CHECKS)]
                            for c in (C0, C1, C2, C3, C4, OFF)}
         self.pulls = {
-            C1: [self.pr(2, C1, sha(0x202))],
-            C2: [self.pr(4, C2, sha(0x204))],
+            C1: [self.pr(2, C1, sha(0x302))],
+            C2: [self.pr(4, C2, H4)],
             C3: [self.pr(5, C3, H5)],
-            C4: [self.pr(6, C4, sha(0x206))],
+            C4: [self.pr(6, C4, H6)],
+        }
+        self.pull_details = {
+            4: {"number": 4, "merged": True, "merged_at": ts(5), "merge_commit_sha": C2,
+                "base": {"ref": "main", "repo": {"full_name": REPO}}, "head": {"sha": H4}},
         }
         self.statuses = {
             H5: [self.status("review-gate", "success", 50)],
-            sha(0x206): [self.status("review-gate", "success", 60)],
+            H6: [self.status("review-gate", "success", 60)],
             C3: [self.status("release-preflight/v0.3.0", "success", 100, url_run=500)],
         }
         self.runs = {
@@ -79,6 +99,7 @@ class FakeRepo:
             obj = self.tags.get(path.rsplit("/", 1)[1])
             return None if obj is None else {"object": dict(obj)}
         if path.startswith(prefix + "/contents/"):
+            self.content_paths.append(path[len(prefix + "/contents/"):])
             text = self.files.get((path[len(prefix + "/contents/"):], params["ref"]))
             return None if text is None else b64(text)
         raise AssertionError(path)
@@ -106,6 +127,12 @@ class FakeRepo:
             self._hit(path)
             commit = path.rsplit("/", 1)[1]
             return {"sha": commit, "parents": [{"sha": p} for p in self.parents[commit]]}
+        if path.startswith(prefix + "/pulls/"):
+            self._hit(path)
+            pr = self.pull_details.get(int(path.rsplit("/", 1)[1]))
+            if pr is None:
+                raise github_api.ApiError("404")
+            return copy.deepcopy(pr)
         raise AssertionError(path)
 
     def get_all(self, path, params=None, key=None):
@@ -156,6 +183,11 @@ def audit_env():
 
 class Base(unittest.TestCase):
     def setUp(self):
+        # Synthetic anchors for the synthetic history; the real values are pinned in AnchorTests.
+        for name, value in (("PRE_GATE_TAGS", {"v0.1.0": C00, "v0.2.0": C0}), ("GATE_BASELINE", C1), ("GATE_INTRODUCTION_PR", 4)):
+            patcher = mock.patch.object(rel, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.repo = FakeRepo()
 
     def run_mode(self, mode, env_):
@@ -190,12 +222,13 @@ class PreflightTests(Base):
         self.assertEqual(code, 0, report.lines)
         self.assertTrue(any(m.startswith("P5") for m in self.messages(report, "PASS")))
 
-    def test_u5_pre_gate_prs_are_informational(self):
+    def test_u5_walk_ends_at_baseline_through_gate_introduction(self):
         _, report = self.run_mode("gate", dispatch_env())
-        info = self.messages(report, "INFO")
-        self.assertTrue(any("PR #2" in m and "pre-gate" in m for m in info))
-        self.assertTrue(any("PR #4" in m and "pre-gate" in m for m in info))
-        self.assertTrue(any("PR #5 review-gate success" in m for m in self.messages(report, "PASS")))
+        passed = self.messages(report, "PASS")
+        self.assertTrue(any("gate introduction PR #4" in m and "verified" in m for m in passed))
+        self.assertTrue(any("PR #5 review-gate success" in m for m in passed))
+        self.assertTrue(any("GATE_BASELINE" in m and "pre-gate" in m for m in self.messages(report, "INFO")))
+        self.assertFalse(any("PR #2" in m for _, m in report.lines))
 
     def test_u2_sha_on_main_but_not_head_fails(self):
         code, report = self.run_mode("gate", dispatch_env(sha_=C2, workflow_sha=C3))
@@ -426,6 +459,223 @@ class AuditTests(Base):
         e = audit_env()
         e["GITHUB_EVENT_NAME"] = "push"
         self.assertEqual(rel.run("audit", e, lambda: self.repo), 1)
+
+
+class PreGateAnchorTests(Base):
+    """F01: pre-gate status comes only from pinned tags and GATE_BASELINE."""
+
+    def test_f01a_pinned_tag_on_another_commit_fails(self):
+        self.repo.tags["v0.2.0"] = {"type": "commit", "sha": C1}
+        code, report = self.run_mode("audit", audit_env())
+        self.assertEqual(code, 1)
+        self.assertTrue(any("pre-gate tag v0.2.0" in m for m in self.messages(report, "FAIL")))
+
+    def test_f01b_later_tag_without_workflow_files_is_fully_verified(self):
+        # No workflow file exists anywhere in the synthetic repository, and none is consulted.
+        self.repo.head = C4
+        self.repo.tags["v0.3.1"] = {"type": "commit", "sha": C4}
+        code, report = self.run_mode("audit", audit_env())
+        self.assertEqual(code, 1)
+        self.assertFalse(any("v0.3.1" in m and "pre-gate" in m for m in self.messages(report, "INFO")))
+        self.assertTrue(any("no post-tag gate run found for v0.3.1" in m for m in self.messages(report, "FAIL")))
+        self.assertFalse([p for p in self.repo.content_paths if p.startswith(".github/")])
+
+    def test_f01c_new_tag_on_pre_gate_commit_is_not_pre_gate(self):
+        for commit in (C00, C0, C1):
+            with self.subTest(commit=commit[-3:]):
+                self.repo = FakeRepo()
+                self.repo.tags["v0.2.1"] = {"type": "commit", "sha": commit}
+                self.repo.tag_runs["v0.2.1"] = [{"id": 601, "created_at": ts(200), "head_branch": "v0.2.1"}]
+                code, report = self.run_mode("audit", audit_env())
+                self.assertEqual(code, 1)
+                self.assertFalse(any("v0.2.1" in m and "pre-gate" in m for m in self.messages(report, "INFO")))
+                self.assertTrue(any(m.startswith("P3") for m in self.messages(report, "FAIL")))
+
+    def test_f01d_release_at_baseline_fails_p3(self):
+        self.repo.head = C1
+        code, report = self.run_mode("gate", dispatch_env(sha_=C1))
+        self.assertEqual(code, 1)
+        self.assertTrue(any("without the gate introduction" in m for m in self.messages(report, "FAIL")))
+
+    def test_f01e_inconsistent_anchors_fail_before_any_api_call(self):
+        def no_client():
+            raise AssertionError("API must not be used with inconsistent anchors")
+        cases = (
+            ("GATE_BASELINE", C1[:39]), ("GATE_BASELINE", None), ("PRE_GATE_TAGS", {}),
+            ("PRE_GATE_TAGS", {"v0.2.0": "abc"}), ("PRE_GATE_TAGS", {"latest": C0}),
+            ("GATE_INTRODUCTION_PR", 0), ("GATE_INTRODUCTION_PR", "4"),
+        )
+        for name, value in cases:
+            with self.subTest(name=name, value=value), mock.patch.object(rel, name, value):
+                for mode, e in (("gate", dispatch_env()), ("gate", push_env()), ("audit", audit_env())):
+                    self.assertEqual(rel.run(mode, e, no_client), 1)
+
+    def test_f01f_history_that_never_reaches_baseline_fails(self):
+        with mock.patch.object(rel, "GATE_BASELINE", sha(0xABC)):
+            code, report = self.run_mode("gate", dispatch_env())
+        self.assertEqual(code, 1)
+        self.assertTrue(any("does not reach GATE_BASELINE" in m for m in self.messages(report, "FAIL")))
+
+    def test_f01g_api_error_in_history_fails_closed(self):
+        self.repo.fail.add(f"/commits/{C2}")
+        code, report = self.run_mode("gate", dispatch_env())
+        self.assertEqual(code, 1)
+        self.assertTrue(any("failing closed" in m for m in self.messages(report, "FAIL")))
+
+
+class MergeMethodTests(Base):
+    """F02: only merge commits with two parents, one merged PR and second parent == PR head."""
+
+    def assert_p3_fail(self, needle):
+        code, report = self.run_mode("gate", dispatch_env())
+        self.assertEqual(code, 1)
+        self.assertTrue(any(m.startswith("P3") and needle in m for m in self.messages(report, "FAIL")), report.lines)
+
+    def test_f02a_squash_merge_fails(self):
+        self.repo.parents[C3] = [C2]
+        self.assert_p3_fail("unsupported merge method")
+
+    def test_f02b_rebase_merge_with_several_commits_fails(self):
+        r1 = sha(0x401)
+        self.repo.parents[C3], self.repo.parents[r1] = [r1], [C2]
+        self.assert_p3_fail("unsupported merge method")
+
+    def test_f02c_octopus_merge_fails(self):
+        self.repo.parents[C3] = [C2, H5, sha(0x402)]
+        self.assert_p3_fail("unsupported merge method")
+
+    def test_f02d_direct_push_fails(self):
+        self.repo.parents[C3] = [C2]
+        self.repo.pulls[C3] = []
+        self.assert_p3_fail("unsupported merge method")
+
+    def test_f02e_second_parent_is_not_pr_head(self):
+        self.repo.parents[C3] = [C2, sha(0x403)]
+        self.assert_p3_fail("second parent is not the PR head")
+
+    def test_f02f_merge_commit_of_zero_or_two_prs(self):
+        for pulls in ([], [FakeRepo.pr(5, C3, H5), FakeRepo.pr(7, C3, H5)], [dict(FakeRepo.pr(5, C3, H5), base={"ref": "dev"})]):
+            with self.subTest(n=len(pulls)):
+                self.repo = FakeRepo()
+                self.repo.pulls[C3] = pulls
+                self.assert_p3_fail("not the merge of exactly one PR")
+
+    def test_f02g_approved_head_still_needs_merge_topology(self):
+        # The PR head carries review-gate success, but the merge is a squash: still FAIL.
+        self.repo.parents[C3] = [C2]
+        self.repo.pulls[C3] = [FakeRepo.pr(5, C3, H5)]
+        code, report = self.run_mode("gate", dispatch_env())
+        self.assertEqual(code, 1)
+        self.assertFalse(any("PR #5 review-gate success" in m for m in self.messages(report, "PASS")))
+
+
+class GateIntroductionTests(Base):
+    """C3: one exception, only for the verified merge of PR #4."""
+
+    def assert_intro_fail(self, needle):
+        code, report = self.run_mode("gate", dispatch_env())
+        self.assertEqual(code, 1)
+        fails = self.messages(report, "FAIL")
+        self.assertTrue(any("gate introduction" in m and needle in m for m in fails), report.lines)
+        self.assertFalse(any("gate introduction" in m for m in self.messages(report, "PASS")))
+
+    def test_c3a_main_moved_before_the_merge(self):
+        mid, hmid = sha(0x110), sha(0x210)
+        self.repo.parents[C2] = [mid, H4]
+        self.repo.parents[mid] = [C1, hmid]
+        self.repo.pulls[mid] = [FakeRepo.pr(3, mid, hmid)]
+        self.repo.statuses[hmid] = [FakeRepo.status("review-gate", "success", 40)]
+        self.assert_intro_fail("new owner decision")
+
+    def test_c3b_no_exception_by_position_for_another_pr(self):
+        self.repo.pulls[C2] = [FakeRepo.pr(7, C2, H4)]
+        code, report = self.run_mode("gate", dispatch_env())
+        self.assertEqual(code, 1)
+        self.assertTrue(any("PR #7 without review-gate success" in m for m in self.messages(report, "FAIL")))
+        self.assertFalse(any("gate introduction" in m for m in self.messages(report, "PASS")))
+
+    def test_c3c_pull_request_resource_must_match(self):
+        changes = {
+            "pull request number": {"number": 5},
+            "not merged": {"merged": False},
+            "base is not main": {"base": {"ref": "dev", "repo": {"full_name": REPO}}},
+            "merge_commit_sha": {"merge_commit_sha": C3},
+            "second parent is not the final PR head": {"head": {"sha": sha(0x404)}},
+        }
+        for needle, change in changes.items():
+            with self.subTest(needle=needle):
+                self.repo = FakeRepo()
+                self.repo.pull_details[4].update(change)
+                self.assert_intro_fail(needle)
+        self.repo = FakeRepo()
+        self.repo.pull_details[4]["base"]["repo"]["full_name"] = "someone/fork"
+        self.assert_intro_fail("base is not main")
+
+    def test_c3d_pull_request_lookup_failure_fails_closed(self):
+        del self.repo.pull_details[4]
+        code, report = self.run_mode("gate", dispatch_env())
+        self.assertEqual(code, 1)
+        self.assertTrue(any("failing closed" in m for m in self.messages(report, "FAIL")))
+
+    def test_c3e_record_missing(self):
+        del self.repo.files[(RECORD, C3)]
+        self.assert_intro_fail("missing")
+
+    def test_c3f_record_contents(self):
+        cases = {
+            "record PR": record_text(pr="5"),
+            "record head-sha": record_text(head=sha(0x405)),
+            "record merge-commit-sha": record_text(merge=C3),
+            "record independent-review": record_text(review="LHR-GOV-PR4-R2 = HOLD_WITH_FINDINGS"),
+            "record owner-authorization": record_text(auth="LHR-GOV-PR4-MERGE = PENDING"),
+            "record malformed": record_text() + "head-sha: " + H4 + "\n",
+        }
+        for needle, text in cases.items():
+            with self.subTest(needle=needle):
+                self.repo = FakeRepo()
+                self.repo.files[(RECORD, C3)] = text
+                self.assert_intro_fail(needle)
+        self.repo = FakeRepo()
+        self.repo.files[(RECORD, C3)] = record_text().replace("owner-authorization", "owner")
+        self.assert_intro_fail("record malformed")
+
+    def test_c3g_accepted_record_variants(self):
+        for review, auth in (("LHR-GOV-PR4-R2 = PASS_WITH_FINDINGS", "LHR-GOV-PR4-MERGE = AUTHORIZED_MERGE"),):
+            with self.subTest(review=review):
+                self.repo = FakeRepo()
+                self.repo.files[(RECORD, C3)] = record_text(review=review, auth=auth)
+                self.assertEqual(self.run_mode("gate", dispatch_env())[0], 0)
+
+    def test_c3h_releasing_the_introduction_commit_without_record_fails(self):
+        self.repo.head = C2
+        code, report = self.run_mode("gate", dispatch_env(sha_=C2))
+        self.assertEqual(code, 1)
+        self.assertTrue(any("missing" in m for m in self.messages(report, "FAIL")))
+
+    def test_c3i_post_tag_and_audit_apply_the_same_rules(self):
+        self.tag_v030()
+        self.assertEqual(self.run_mode("gate", push_env())[0], 0)
+        self.assertEqual(self.run_mode("audit", audit_env())[0], 0)
+        self.repo.parents[C3] = [C2]
+        self.assertEqual(self.run_mode("gate", push_env())[0], 1)
+        self.assertEqual(self.run_mode("audit", audit_env())[0], 1)
+
+
+class AnchorTests(unittest.TestCase):
+    def test_real_anchors_are_pinned(self):
+        tags, baseline, pr = REAL_ANCHORS
+        self.assertEqual(tags, {
+            "v0.1.0": "2895ccd9864e8c4d02bd9e5dd473717c3d61c5f8",
+            "v0.2.0": "a0616c83560ed40bd24280465014292a268872c4",
+        })
+        self.assertEqual(baseline, "dea0ac9379cc688b3ff9edce16f17bf41c29d747")
+        self.assertEqual(pr, 4)
+        self.assertTrue(rel.anchors_valid())
+
+    def test_no_classification_by_workflow_presence(self):
+        source = inspect.getsource(rel)
+        self.assertNotIn("RELEASE_GATE_PATH, commit", source)
+        self.assertNotIn("review-gate.yml", source)
 
 
 class StaticTests(unittest.TestCase):
