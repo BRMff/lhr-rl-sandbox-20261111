@@ -18,7 +18,7 @@ Governance limits are described in [governance.md](governance.md).
    |---|---|
    | P1 | `sha` is the current `main` head |
    | P2 | the required CI checks succeeded on `sha` |
-   | P3 | every PR merged since the previous tag had `review-gate: success` on its merged head (PRs merged before the gate existed are reported as pre-gate) |
+   | P3 | every first-parent commit since the previous release tag is a supported merge (see below) of a PR whose head had `review-gate: success`. The walk must end at a previous post-gate release tag, or at `GATE_BASELINE` through the verified gate introduction |
    | P4 | the tag matches `__version__`, and `CHANGELOG.md` has a dated entry for that version |
    | P5 | the tag does not exist yet |
 
@@ -43,8 +43,56 @@ Pushing a `v*` tag runs **release-gate** on the tag:
 | T4 | a valid `release-preflight/<tag>` status exists on `C`: success, created by `github-actions[bot]`, linked to a successful `workflow_dispatch` run of `release-gate.yml` on `main` for `C` with the expected title, and created **before** the tag run. **Missing evidence is a failure**, never a warning |
 
 The daily **release-audit** applies T1–T4 to every `v*` tag from `main`. It therefore also
-catches a tag whose commit carries a modified or missing gate. Tags created before the
-gate existed (`v0.1.0`, `v0.2.0`) are reported as pre-gate.
+catches a tag whose commit carries a modified or missing gate.
+
+## Pre-gate history and supported merges
+
+Pre-gate status comes **only** from fixed anchors in `ci/release_gate.py`, never from the
+presence or absence of a workflow file:
+
+| Anchor | Value | Meaning |
+|---|---|---|
+| `PRE_GATE_TAGS` | `v0.1.0` → `2895ccd9…`, `v0.2.0` → `a0616c83…` (full SHAs in the code) | The only tags reported as pre-gate. A pinned tag that resolves to another commit is a **FAIL**; every other tag gets T1–T4 |
+| `GATE_BASELINE` | `dea0ac9379cc688b3ff9edce16f17bf41c29d747` | Commits at or before it on the first-parent history of `main` are pre-gate |
+| `GATE_INTRODUCTION_PR` | `4` | The single exception described below |
+
+`main` is protected against force pushes and deletion, so these anchors stay verifiable.
+API errors, invalid anchors, or a history that does not reach `GATE_BASELINE` are a **FAIL**.
+
+**Only merge commits are supported.** Each first-parent commit after `GATE_BASELINE` must:
+
+1. have exactly two parents;
+2. be the `merge_commit_sha` of exactly one PR merged into `main`;
+3. have the PR head as its second parent.
+
+Squash merges, rebase merges, octopus merges and direct pushes are a **FAIL**.
+
+### Gate introduction (PR #4)
+
+The PR that introduced the gates cannot carry a `review-gate` status, because the
+reconciler only runs from `main`. Its merge is accepted only if **all** of these hold:
+
+- its first parent is `GATE_BASELINE`; if `main` moved before the merge, this fails and a
+  new owner decision is required;
+- PR #4 is merged into `main` of this repository;
+- its `merge_commit_sha` is the commit being evaluated;
+- its final head is the second parent;
+- `docs/governance-introduction.md` exists at the commit being released and matches.
+
+The record is added after the merge, through a normal gated PR, because it must name the
+merge commit:
+
+```text
+gate-introduction-pr: 4
+head-sha: <final head SHA of PR #4, 40 hex>
+merge-commit-sha: <merge commit SHA of PR #4, 40 hex>
+independent-review: <LHR-… identifier> = PASS | PASS_WITH_FINDINGS
+owner-authorization: <LHR-… identifier> = AUTHORIZED[_…]
+```
+
+Each key appears exactly once. Until the record exists, every release fails P3. The record
+is self-declared by the same identity: it documents the out-of-band review, it does not
+prove it.
 
 ## 3. If a violation is detected
 

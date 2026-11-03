@@ -109,13 +109,25 @@ merge commits, and no other workflow writes the `review-gate` context. A status 
 the merge commit is deliberate abuse, outside scope. This behaviour must be confirmed in
 a disposable sandbox before the check is made required (tests RG-SB1–SB4).
 
+## Supported merge method
+
+Only **merge commits** are supported. The release gate rejects squash merges, rebase
+merges, octopus merges and direct pushes on `main`, because the approved head must be the
+second parent of the merge (see [release-process.md](release-process.md#pre-gate-history-and-supported-merges)).
+Restricting `allowed_merge_methods` to `merge` in the ruleset is a separate owner decision.
+Until then, this rule is enforced by detection, not prevention.
+
 ## Activation (owner actions, each separately authorised)
 
-1. Merge this governance change through the normal process. The reconciler only runs
-   from `main`, so it does not evaluate its own pull request.
+1. Merge this governance change (PR #4) with a merge commit while `main` is still at
+   `GATE_BASELINE` (`dea0ac9`). If `main` has moved, stop: a new owner decision is required.
+   The reconciler only runs from `main`, so it does not evaluate its own pull request.
 2. Create the label `review:passed`.
-3. Run the sandbox tests (RG-SB1–SB4, release gate) and the production validation PR (RG-E1–E19).
-4. Add `review-gate` as a required status check in the `main protection` ruleset, within
+3. Add `docs/governance-introduction.md` through a normal gated PR, recording the final head,
+   the merge commit, the independent review and the owner's authorisation (format in
+   [release-process.md](release-process.md#gate-introduction-pr-4)). Releases fail P3 until it exists.
+4. Run the sandbox tests (RG-SB1–SB4, release gate) and the production validation PR (RG-E1–E19).
+5. Add `review-gate` as a required status check in the `main protection` ruleset, within
    seven days of a real `success` (RR2). Confirm with RG-E11. Roll back if anything diverges.
 
 ## Changing required checks

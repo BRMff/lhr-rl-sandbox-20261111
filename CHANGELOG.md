@@ -14,7 +14,9 @@ The JSON schema is described in [docs/schema.md](docs/schema.md).
   required check: activation is a separate owner step.
 - Release gate: a `workflow_dispatch` preflight that records
   `release-preflight/<tag>` evidence, a post-tag verification, and a daily
-  `release-audit` of every `v*` tag.
+  `release-audit` of every `v*` tag. Pre-gate history is fixed by pinned
+  anchors (`v0.1.0`, `v0.2.0`, `GATE_BASELINE`), and only merge commits are
+  supported.
 - `docs/governance.md` and `docs/release-process.md`, including the shared
   identity limits and the residual risks.
 
