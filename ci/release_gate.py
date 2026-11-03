@@ -221,20 +221,6 @@ def check_version(client, repo: str, sha: str, tag: str, report: Report) -> None
         report.fail(f"P4 CHANGELOG has no dated entry for {version}")
 
 
-def other_tag_commits(client, repo: str, exclude: str | None) -> set[str]:
-    """Commits of previous post-gate releases. Pinned pre-gate tags are not
-    stopping points: the walk must reach GATE_BASELINE instead."""
-    commits = set()
-    for item in client.get_all(f"/repos/{repo}/tags"):
-        name = item.get("name") if isinstance(item, dict) else None
-        if valid_tag(name) and name != exclude and name not in PRE_GATE_TAGS:
-            sha = (item.get("commit") or {}).get("sha")
-            if not valid_sha(sha):
-                raise ApiError("malformed tag listing")
-            commits.add(sha)
-    return commits
-
-
 def merged_pull(client, repo: str, commit: str) -> dict | None:
     pulls = client.get_all(f"/repos/{repo}/commits/{commit}/pulls")
     merged = [
@@ -333,11 +319,13 @@ def check_merge(client, repo: str, commit: str, parents: list[str], evidence_ref
     return False
 
 
-def check_reviews(client, repo: str, sha: str, exclude_tag: str | None, report: Report) -> None:
-    """P3: walk the first-parent history from ``sha`` back to the previous
-    post-gate release tag, or to GATE_BASELINE through the verified gate
-    introduction. Reaching the baseline any other way, or the root, is a FAIL."""
-    stop = other_tag_commits(client, repo, exclude_tag)
+def check_reviews(client, repo: str, sha: str, report: Report) -> None:
+    """P3: walk the whole first-parent history from ``sha`` back to
+    GATE_BASELINE, verifying every merge on the way (R2-F04). Earlier release
+    tags are never stopping points, valid or not: a tag does not prove that
+    the merges before it passed the gate. The baseline must be reached
+    through the verified gate introduction; reaching it any other way, the
+    root, or the walk limit is a FAIL."""
     current = sha
     came_from_introduction = False
     for _ in range(MAX_WALK):
@@ -346,8 +334,6 @@ def check_reviews(client, repo: str, sha: str, exclude_tag: str | None, report: 
                 report.info(f"P3 history at or before GATE_BASELINE {GATE_BASELINE[:7]} is pre-gate")
             else:
                 report.fail(f"P3 reached GATE_BASELINE {GATE_BASELINE[:7]} without the gate introduction merge")
-            return
-        if current in stop:
             return
         parents = commit_parents(client, repo, current)
         if not parents:
@@ -437,7 +423,7 @@ def preflight(env: dict, client, repo: str, tag: str, sha: str, report: Report) 
         report.fail(f"P1 {sha[:7]} is not the current main head")
         return
     check_required_checks(client, repo, sha, report)
-    check_reviews(client, repo, sha, None, report)
+    check_reviews(client, repo, sha, report)
     check_version(client, repo, sha, tag, report)
     if tag_commit(client, repo, tag) is None:
         report.ok(f"P5 {tag} does not exist")
@@ -457,7 +443,7 @@ def post_tag(env: dict, client, repo: str, server: str, tag: str, report: Report
         report.fail(f"T2 {commit[:7]} is not on the main first-parent history")
         return
     check_required_checks(client, repo, commit, report)
-    check_reviews(client, repo, commit, tag, report)
+    check_reviews(client, repo, commit, report)
     check_version(client, repo, commit, tag, report)
     this_run = client.get(f"/repos/{repo}/actions/runs/{env.get('GITHUB_RUN_ID', '')}")
     check_preflight_evidence(client, repo, server, tag, commit, parse_time(this_run.get("created_at")), report)
@@ -489,7 +475,7 @@ def audit(env: dict, client, repo: str, server: str, report: Report) -> None:
             report.fail(f"T2 {tag} ({commit[:7]}) is not on the main first-parent history")
             continue
         check_required_checks(client, repo, commit, report)
-        check_reviews(client, repo, commit, tag, report)
+        check_reviews(client, repo, commit, report)
         check_version(client, repo, commit, tag, report)
         runs = client.get_all(
             f"/repos/{repo}/actions/workflows/release-gate.yml/runs",

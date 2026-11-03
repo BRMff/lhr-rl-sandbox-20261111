@@ -661,6 +661,70 @@ class GateIntroductionTests(Base):
         self.assertEqual(self.run_mode("audit", audit_env())[0], 1)
 
 
+class PreviousTagTests(Base):
+    """R2-F04: earlier release tags are never stopping points for P3."""
+
+    def setUp(self):
+        super().setUp()
+        # PR #5 (C3) was merged without approval and tagged v0.3.0; PR #6 (C4) is approved.
+        self.repo.statuses[H5] = []
+        self.repo.tags["v0.3.0"] = {"type": "commit", "sha": C3}
+        self.repo.head = C4
+        self.repo.files[("linux_health_reporter/__init__.py", C4)] = '__version__ = "0.3.1"\n'
+        self.repo.files[("CHANGELOG.md", C4)] = "# Changelog\n\n## [0.3.1] — 2026-11-20\n"
+        self.repo.statuses[C4] = [FakeRepo.status("release-preflight/v0.3.1", "success", 100, url_run=510)]
+        self.repo.runs[510] = dict(self.repo.runs[500], id=510, head_sha=C4, display_title=f"release-preflight v0.3.1 {C4}")
+        self.repo.runs[610] = {"id": 610, "created_at": ts(200), "head_branch": "v0.3.1"}
+        self.repo.tag_runs["v0.3.1"] = [self.repo.runs[610]]
+
+    def unapproved_pr5(self, report):
+        return [m for m in self.messages(report, "FAIL") if m.startswith("P3 PR #5 without review-gate success")]
+
+    def test_r2f04a_preflight_does_not_stop_at_invalid_earlier_tag(self):
+        code, report = self.run_mode("gate", dispatch_env(tag="v0.3.1", sha_=C4))
+        self.assertEqual(code, 1)
+        self.assertEqual(len(self.unapproved_pr5(report)), 1, report.lines)
+        self.assertTrue(any("PR #6 review-gate success" in m for m in self.messages(report, "PASS")))
+
+    def test_r2f04b_post_tag_does_not_stop_at_invalid_earlier_tag(self):
+        self.repo.tags["v0.3.1"] = {"type": "commit", "sha": C4}
+        e = push_env("v0.3.1")
+        e["GITHUB_RUN_ID"] = "610"
+        code, report = self.run_mode("gate", e)
+        self.assertEqual(code, 1)
+        self.assertEqual(len(self.unapproved_pr5(report)), 1, report.lines)
+        self.assertTrue(any(m.startswith("T4 preflight evidence for v0.3.1 at") for m in self.messages(report, "PASS")))
+
+    def test_r2f04c_audit_flags_the_later_release_too(self):
+        self.repo.tags["v0.3.1"] = {"type": "commit", "sha": C4}
+        code, report = self.run_mode("audit", audit_env())
+        self.assertEqual(code, 1)
+        # Once for v0.3.0 itself and once for v0.3.1, whose walk goes through C3.
+        self.assertEqual(len(self.unapproved_pr5(report)), 2, report.lines)
+
+    def test_r2f04d_valid_earlier_tag_does_not_shorten_the_walk(self):
+        self.repo.statuses[H5] = [FakeRepo.status("review-gate", "success", 50)]
+        code, report = self.run_mode("gate", dispatch_env(tag="v0.3.1", sha_=C4))
+        self.assertEqual(code, 0, report.lines)
+        passed = self.messages(report, "PASS")
+        for needle in ("PR #6 review-gate success", "PR #5 review-gate success", "gate introduction PR #4"):
+            self.assertTrue(any(needle in m for m in passed), needle)
+        self.assertTrue(any("GATE_BASELINE" in m for m in self.messages(report, "INFO")))
+
+    def test_r2f04e_tag_listing_is_not_used_by_p3(self):
+        self.repo.statuses[H5] = [FakeRepo.status("review-gate", "success", 50)]
+        self.repo.fail.add(f"/repos/{REPO}/tags")
+        code, report = self.run_mode("gate", dispatch_env(tag="v0.3.1", sha_=C4))
+        self.assertEqual(code, 0, report.lines)
+
+    def test_r2f04f_walk_limit_fails_closed(self):
+        self.repo.statuses[H5] = [FakeRepo.status("review-gate", "success", 50)]
+        with mock.patch.object(rel, "MAX_WALK", 2):
+            code, report = self.run_mode("gate", dispatch_env(tag="v0.3.1", sha_=C4))
+        self.assertEqual(code, 1)
+        self.assertTrue(any("failing closed" in m for m in self.messages(report, "FAIL")))
+
+
 class AnchorTests(unittest.TestCase):
     def test_real_anchors_are_pinned(self):
         tags, baseline, pr = REAL_ANCHORS
