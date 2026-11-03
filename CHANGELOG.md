@@ -3,6 +3,21 @@
 All notable changes to this project are documented here.
 The JSON schema is described in [docs/schema.md](docs/schema.md).
 
+## [Unreleased]
+
+### Added (repository governance; the package is unchanged)
+- Review gate: a signal-only `review-gate-trigger` workflow plus a trusted
+  reconciler (`review-gate`, from `main`) that maintains the commit status
+  `review-gate` on the head of every open pull request, based on the owner's
+  `review:passed` label. It is SHA-bound, never shares an approval between
+  pull requests, and fails closed on incomplete API data. It is not yet a
+  required check: activation is a separate owner step.
+- Release gate: a `workflow_dispatch` preflight that records
+  `release-preflight/<tag>` evidence, a post-tag verification, and a daily
+  `release-audit` of every `v*` tag.
+- `docs/governance.md` and `docs/release-process.md`, including the shared
+  identity limits and the residual risks.
+
 ## [0.2.0] — 2026-11-01
 
 ### Added
