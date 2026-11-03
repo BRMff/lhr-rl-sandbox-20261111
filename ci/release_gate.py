@@ -54,7 +54,8 @@ GATE_BASELINE = "dea0ac9379cc688b3ff9edce16f17bf41c29d747"
 # owner's record of the out-of-band review must be present.
 GATE_INTRODUCTION_PR = 4
 GATE_INTRODUCTION_RECORD = "docs/governance-introduction.md"
-RECORD_REVIEW_RE = re.compile(r"LHR-[A-Z0-9-]+ = PASS(_WITH_FINDINGS)?")
+# Closed list of accepted review results (R3-N1), matched with fullmatch().
+RECORD_REVIEW_RE = re.compile(r"LHR-[A-Z0-9-]+ = PASS(_WITH_FINDINGS|_NARROW)?")
 RECORD_AUTHORIZATION_RE = re.compile(r"LHR-[A-Z0-9-]+ = AUTHORIZED(_[A-Z_]+)?")
 
 # Required checks of pushes to main. Must match the job names of

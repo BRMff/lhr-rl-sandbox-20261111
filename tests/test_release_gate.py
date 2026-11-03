@@ -646,6 +646,26 @@ class GateIntroductionTests(Base):
                 self.repo.files[(RECORD, C3)] = record_text(review=review, auth=auth)
                 self.assertEqual(self.run_mode("gate", dispatch_env())[0], 0)
 
+    def test_c3j_independent_review_results(self):
+        # R3-N1: closed list PASS, PASS_WITH_FINDINGS, PASS_NARROW, matched as a whole value.
+        for review in ("LHR-GOV-PR4-R3 = PASS", "LHR-GOV-PR4-R3 = PASS_WITH_FINDINGS", "LHR-GOV-PR4-R3 = PASS_NARROW"):
+            with self.subTest(accepted=review):
+                self.repo = FakeRepo()
+                self.repo.files[(RECORD, C3)] = record_text(review=review)
+                self.assertEqual(self.run_mode("gate", dispatch_env())[0], 0)
+        rejected = (
+            "LHR-GOV-PR4-R3 = HOLD", "LHR-GOV-PR4-R3 = FAIL", "LHR-GOV-PR4-R2 = HOLD_NARROW_R2_F04",
+            "LHR-GOV-PR4-R3 = PASSED", "LHR-GOV-PR4-R3 = PASS_", "LHR-GOV-PR4-R3 = PASS_NARROW_X",
+            "LHR-GOV-PR4-R3 = PASS_WITH_FINDINGS_X", "LHR-GOV-PR4-R3 = PASS_NARROWER", "LHR-GOV-PR4-R3 = PASS_OTHER",
+            "LHR-GOV-PR4-R3 = NOT_PASS", "LHR-GOV-PR4-R3 = pass_narrow", "LHR-GOV-PR4-R3 = PASS NARROW",
+            "XLHR-GOV-PR4-R3 = PASS", "LHR-GOV-PR4-R3 = PASS; FAIL", "LHR-GOV-PR4-R3 =PASS", "PASS_NARROW",
+        )
+        for review in rejected:
+            with self.subTest(rejected=review):
+                self.repo = FakeRepo()
+                self.repo.files[(RECORD, C3)] = record_text(review=review)
+                self.assert_intro_fail("record independent-review")
+
     def test_c3h_releasing_the_introduction_commit_without_record_fails(self):
         self.repo.head = C2
         code, report = self.run_mode("gate", dispatch_env(sha_=C2))

@@ -95,7 +95,7 @@ merge commit:
 gate-introduction-pr: 4
 head-sha: <final head SHA of PR #4, 40 hex>
 merge-commit-sha: <merge commit SHA of PR #4, 40 hex>
-independent-review: <LHR-… identifier> = PASS | PASS_WITH_FINDINGS
+independent-review: <LHR-… identifier> = PASS | PASS_WITH_FINDINGS | PASS_NARROW
 owner-authorization: <LHR-… identifier> = AUTHORIZED[_…]
 ```
 
