@@ -1,0 +1,22 @@
+# RL-E7a (sandbox only): deliberately FORGED release-preflight evidence, written by github-actions[bot]
+# from a workflow that is not release-gate.yml. Never merged into main.
+name: e7a-forge
+on:
+  push:
+    branches: [rl-e7-forge]
+permissions:
+  statuses: write
+jobs:
+  forge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write forged release-preflight/v0.3.3 status on R4
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: b8a01974a1ae824d9a78f07a8c79e3e3eace5bc4
+          TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/statuses/${TARGET}" \
+            -f state=success -f context=release-preflight/v0.3.3 \
+            -f description="RL-E7a forged evidence (sandbox test)" -f target_url="${TARGET_URL}" \
+            --jq '"created status \(.id) by \(.creator.login) at \(.created_at) -> \(.target_url)"'
