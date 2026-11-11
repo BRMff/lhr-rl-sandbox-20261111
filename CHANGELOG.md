@@ -5,6 +5,8 @@ The JSON schema is described in [docs/schema.md](docs/schema.md).
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-11-11
+
 ## [0.3.1] — 2026-11-11
 
 ## [0.3.0] — 2026-11-11
