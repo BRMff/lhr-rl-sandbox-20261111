@@ -5,6 +5,8 @@ The JSON schema is described in [docs/schema.md](docs/schema.md).
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-11-11
+
 ### Added (repository governance; the package is unchanged)
 - Review gate: a signal-only `review-gate-trigger` workflow plus a trusted
   reconciler (`review-gate`, from `main`) that maintains the commit status
